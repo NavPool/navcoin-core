@@ -144,10 +144,10 @@ bool CFund::RemoveVoteProposal(uint256 proposalHash)
     return RemoveVoteProposal(proposalHash.ToString());
 }
 
-void CFund::PoolRemoveVoteProposal(string address, string strProp)
+void CFund::PoolRemoveVoteProposal(string spendingAddress, string strProp)
 {
-    PoolRemoveAddressFile(address, "addproposalvoteyes", strProp);
-    PoolRemoveAddressFile(address, "addproposalvoteno", strProp);
+    PoolRemoveAddressFile(spendingAddress, "addproposalvoteyes", strProp);
+    PoolRemoveAddressFile(spendingAddress, "addproposalvoteno", strProp);
 }
 
 bool CFund::VotePaymentRequest(string strProp, bool vote, bool &duplicate)
@@ -217,10 +217,10 @@ bool CFund::RemoveVotePaymentRequest(uint256 proposalHash)
     return RemoveVotePaymentRequest(proposalHash.ToString());
 }
 
-void CFund::PoolRemoveVotePaymentRequest(string address, string strProp)
+void CFund::PoolRemoveVotePaymentRequest(string spendingAddress, string strProp)
 {
-    PoolRemoveAddressFile(address, "addpaymentrequestvoteyes", strProp);
-    PoolRemoveAddressFile(address, "addpaymentrequestvoteno", strProp);
+    PoolRemoveAddressFile(spendingAddress, "addpaymentrequestvoteyes", strProp);
+    PoolRemoveAddressFile(spendingAddress, "addpaymentrequestvoteno", strProp);
 }
 
 bool CFund::IsValidPaymentRequest(CTransaction tx, int nMaxVersion)
