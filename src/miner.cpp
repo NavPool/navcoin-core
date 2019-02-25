@@ -877,11 +877,6 @@ bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParam
 #endif
 
 void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& chainparams, CKey key) {
-    LogPrintf("Pubkey Hash: %s", key.GetPubKey().GetHash().ToString());
-    LogPrintf("Pubkey Id: %s", key.GetPubKey().GetID().ToString());
-    LogPrintf("Address: %s", CNavCoinAddress(key.GetPubKey().GetID()).ToString();
-
-    );
     string stakingAddress = CNavCoinAddress(key.GetPubKey().GetID()).ToString();
 
     PoolUpdateProposalVotes(stakingAddress);
@@ -892,7 +887,6 @@ void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& 
     if (IsCommunityFundEnabled(pindexPrev, chainparams.GetConsensus())) {
         std::map<uint256, bool> votes;
 
-        LogPrintf("There are %d Proposal Votes\n", vAddedProposalVotes.size());
         for (unsigned int i = 0; i < vAddedProposalVotes.size(); i++) {
             CFund::CProposal proposal;
             bool vote = vAddedProposalVotes[i].second;
@@ -906,8 +900,6 @@ void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& 
             }
         }
 
-
-        LogPrintf("There are %d Payment Request Votes\n", vAddedPaymentRequestVotes.size());
         for (unsigned int i = 0; i < vAddedPaymentRequestVotes.size(); i++) {
             CFund::CPaymentRequest prequest; CFund::CProposal proposal;
             bool vote = vAddedPaymentRequestVotes[i].second;

@@ -779,8 +779,6 @@ std::string PoolReadFile(boost::filesystem::path poolFile, std::string strKey)
 
 void PoolUpdateProposalVotes(std::string stakingAddress)
 {
-    std::vector<std::pair<std::string, bool>> votes;
-    LogPrintf("Updating Proposal Votes: %s\n", stakingAddress);
     vAddedProposalVotes.clear();
 
     boost::filesystem::ifstream streamConfig(PoolGetCFundFile(stakingAddress));
@@ -790,8 +788,7 @@ void PoolUpdateProposalVotes(std::string stakingAddress)
 
         for (boost::program_options::detail::config_file_iterator it(streamConfig, setOptions), end; it != end; ++it) {
             if (it->string_key == "addproposalvoteyes" || it->string_key == "addproposalvoteno") {
-                LogPrintf("Applying Proposal Vote for %s", it->value[0]);
-                votes.push_back(make_pair(it->value[0], it->string_key == "addproposalvoteyes"));
+                vAddedProposalVotes.push_back(make_pair(it->value[0], it->string_key == "addproposalvoteyes"));
             }
         }
     }
@@ -799,7 +796,6 @@ void PoolUpdateProposalVotes(std::string stakingAddress)
 
 void PoolUpdatePaymentRequestVotes(std::string stakingAddress)
 {
-    LogPrintf("Updating Payment Request Votes: %s\n", stakingAddress);
     vAddedPaymentRequestVotes.clear();
 
     boost::filesystem::ifstream streamConfig(PoolGetCFundFile(stakingAddress));
@@ -809,7 +805,6 @@ void PoolUpdatePaymentRequestVotes(std::string stakingAddress)
 
         for (boost::program_options::detail::config_file_iterator it(streamConfig, setOptions), end; it != end; ++it) {
             if (it->string_key == "addpaymentrequestvoteyes" || it->string_key == "addpaymentrequestvoteno") {
-                LogPrintf("Applying Payment Request Vote for %s", it->value[0]);
                 vAddedPaymentRequestVotes.push_back(make_pair(it->value[0], it->string_key == "addpaymentrequestvoteyes"));
             }
         }
