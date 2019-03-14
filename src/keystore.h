@@ -7,6 +7,7 @@
 #define NAVCOIN_KEYSTORE_H
 
 #include "key.h"
+#include "libzeroct/Keys.h"
 #include "pubkey.h"
 #include "script/script.h"
 #include "script/standard.h"
@@ -44,12 +45,38 @@ public:
     virtual bool RemoveWatchOnly(const CScript &dest) =0;
     virtual bool HaveWatchOnly(const CScript &dest) const =0;
     virtual bool HaveWatchOnly() const =0;
+
+    //! Zerocoin Address Parameters
+    virtual bool GetObfuscationJ(libzeroct::ObfuscationValue& oj) const =0;
+    virtual bool GetObfuscationK(libzeroct::ObfuscationValue& ok) const =0;
+    virtual bool GetBlindingCommitment(libzeroct::BlindingCommitment& bc) const =0;
+    virtual bool GetZeroKey(CKey& zk) const =0;
+    virtual bool SetObfuscationJ(const libzeroct::ObfuscationValue& oj) =0;
+    virtual bool SetObfuscationK(const libzeroct::ObfuscationValue& ok) =0;
+    virtual bool SetBlindingCommitment(const libzeroct::BlindingCommitment& bc) =0;
+    virtual bool SetZeroKey(const CKey& zk) =0;
+
 };
 
 typedef std::map<CKeyID, CKey> KeyMap;
 typedef std::map<CKeyID, CPubKey> WatchKeyMap;
 typedef std::map<CScriptID, CScript > ScriptMap;
 typedef std::set<CScript> WatchOnlySet;
+struct ZeroCTAddressParameters {
+    libzeroct::ObfuscationValue obfuscationJ;
+    libzeroct::ObfuscationValue obfuscationK;
+    libzeroct::BlindingCommitment blindingCommitment;
+    CKey zerokey;
+    void SetToZero() {
+        obfuscationK = make_pair(CBigNum(),CBigNum());
+    }
+};
+struct CryptedZeroCTAddressParameters {
+    std::pair<std::vector<unsigned char>, std::vector<unsigned char>> obfuscationJ;
+    std::pair<std::vector<unsigned char>, std::vector<unsigned char>> obfuscationK;
+    libzeroct::BlindingCommitment blindingCommitment;
+    CKey zerokey;
+};
 
 /** Basic key store, that keeps keys in an address->secret map */
 class CBasicKeyStore : public CKeyStore
@@ -59,6 +86,7 @@ protected:
     WatchKeyMap mapWatchKeys;
     ScriptMap mapScripts;
     WatchOnlySet setWatchOnly;
+    ZeroCTAddressParameters zcParameters;
 
 public:
     bool AddKeyPubKey(const CKey& key, const CPubKey &pubkey);
@@ -106,6 +134,59 @@ public:
     virtual bool RemoveWatchOnly(const CScript &dest);
     virtual bool HaveWatchOnly(const CScript &dest) const;
     virtual bool HaveWatchOnly() const;
+
+    bool GetObfuscationJ(libzeroct::ObfuscationValue& oj) const {
+        if(zcParameters.obfuscationJ.first == CBigNum() || zcParameters.obfuscationJ.second == CBigNum())
+            return false;
+        oj = zcParameters.obfuscationJ;
+        return true;
+    }
+    bool GetObfuscationK(libzeroct::ObfuscationValue& ok) const {
+        if(zcParameters.obfuscationK.first == CBigNum() || zcParameters.obfuscationK.second == CBigNum())
+            return false;
+        ok = zcParameters.obfuscationK;
+        return true;
+
+    }
+    bool GetBlindingCommitment(libzeroct::BlindingCommitment& bc) const {
+        if(zcParameters.blindingCommitment.first == CBigNum() || zcParameters.blindingCommitment.second == CBigNum())
+            return false;
+        bc = zcParameters.blindingCommitment;
+        return true;
+
+    }
+    bool GetZeroKey(CKey& zk) const {
+        if(!zcParameters.zerokey.IsValid())
+            return false;
+
+        zk = zcParameters.zerokey;
+        return true;
+
+    }
+    bool SetObfuscationJ(const libzeroct::ObfuscationValue& oj) {
+        if(oj.first == CBigNum() || oj.second == CBigNum())
+            return false;
+        zcParameters.obfuscationJ = oj;
+        return true;
+    }
+    bool SetObfuscationK(const libzeroct::ObfuscationValue& ok) {
+        if(ok.first == CBigNum() || ok.second == CBigNum())
+            return false;
+        zcParameters.obfuscationK = ok;
+        return true;
+    }
+    bool SetBlindingCommitment(const libzeroct::BlindingCommitment& bc) {
+        if(bc.first == CBigNum() || bc.second == CBigNum())
+            return false;
+        zcParameters.blindingCommitment = bc;
+        return true;
+    }
+    bool SetZeroKey(const CKey& zk) {
+        if(!zk.IsValid())
+            return false;
+        zcParameters.zerokey = zk;
+        return true;
+    }
 };
 
 typedef std::vector<unsigned char, secure_allocator<unsigned char> > CKeyingMaterial;

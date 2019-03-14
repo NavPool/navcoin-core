@@ -188,6 +188,13 @@ enum opcodetype
 
     OP_COINSTAKE = 0xc6,
 
+    // zerocoin
+    OP_ZEROCTMINT = 0xc7,
+    OP_ZEROCTSPEND = 0xc8,
+
+    // zeroct
+    OP_FEE = 0xc9,
+
     // template matching params
     OP_SMALLDATA = 0xf9,
     OP_SMALLINTEGER = 0xfa,
@@ -651,8 +658,13 @@ public:
             }
             if (0 <= opcode && opcode <= OP_PUSHDATA4)
                 str += fShort? ValueString(vch).substr(0, 10) : ValueString(vch);
-            else
+            else {
                 str += GetOpName(opcode);
+                if (opcode == OP_ZEROCTSPEND) {
+                    //Zerocoinspend has no further op codes.
+                    break;
+                }
+            }
         }
         return str;
     }
@@ -690,6 +702,11 @@ public:
     bool IsPaymentRequestVoteYes() const;
     bool IsPaymentRequestVoteNo() const;
     bool ExtractVote(uint256 &hash, bool &vote) const;
+
+    bool IsFee() const;
+    bool IsZeroCTMint() const;
+    bool IsZeroCTSpend() const;
+    bool ExtractZeroCTMintData(CPubKey &zkey, std::vector<unsigned char> &commitment, std::vector<unsigned char> &paymentid, std::vector<unsigned char> &obfamount, std::vector<unsigned char> &amcommitment) const;
 
     /** Called by IsStandardTx and P2SH/BIP62 VerifyScript (which makes it consensus-critical). */
     bool IsPushOnly(const_iterator pc) const;

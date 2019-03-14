@@ -9,8 +9,11 @@
 #include "primitives/transaction.h"
 #include "serialize.h"
 #include "uint256.h"
-#include "arith_uint256.h"
 #include "hash.h"
+#include "zeroaccumulators.h"
+
+/** ZeroCT blocks version bits need to signal this */
+static const int32_t VERSIONBITS_TOP_BITS_ZEROCT = 0x80000000UL;
 
 /** Nodes collect new transactions into a block, hash them into a hash tree,
  * and scan through nonce values to make the block's hash satisfy proof-of-work
@@ -68,7 +71,7 @@ public:
     unsigned int GetStakeEntropyBit() const
     {
         // Take last bit of block hash as entropy bit
-        unsigned int nEntropyBit = ((UintToArith256(GetHash()).GetLow64()) & 1llu);
+        unsigned int nEntropyBit = GetHash().GetLow64() & 1llu;
         return nEntropyBit;
     }
 

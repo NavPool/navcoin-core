@@ -13,6 +13,7 @@
 #include "addressindex.h"
 #include "spentindex.h"
 #include "timestampindex.h"
+#include "zeromint.h"
 
 #include <functional>
 #include <map>
@@ -102,8 +103,11 @@ public:
 
     bool GetCoins(const uint256 &txid, CCoins &coins) const;
     bool HaveCoins(const uint256 &txid) const;
+    bool HaveMint(const CBigNum &mintValue) const;
+    bool GetMint(const CBigNum &mintValue, PublicMintChainData &mintData) const;
+    bool HaveSpendSerial(const CBigNum &spendSerial) const;
     uint256 GetBestBlock() const;
-    bool BatchWrite(CCoinsMap &mapCoins, const uint256 &hashBlock);
+    bool BatchWrite(CCoinsMap &mapCoins, std::map<CBigNum, PublicMintChainData>& mapMintValue, std::map<CBigNum, bool>& mapSpendSerial, const uint256 &hashBlock);
     CCoinsViewCursor *Cursor() const;
 };
 

@@ -5,17 +5,21 @@
 
 #include "ismine.h"
 
+#include "chainparams.h"
 #include "key.h"
 #include "keystore.h"
 #include "script/script.h"
 #include "script/standard.h"
 #include "script/sign.h"
+#include "wallet/wallet.h"
 
 #include <boost/foreach.hpp>
 
 using namespace std;
 
 typedef vector<unsigned char> valtype;
+
+std::vector<uint256> vMyMints;
 
 unsigned int HaveKeys(const vector<valtype>& pubkeys, const CKeyStore& keystore)
 {
@@ -79,6 +83,23 @@ isminetype IsMine(const CKeyStore &keystore, const CScript& scriptPubKey)
             return ISMINE_SPENDABLE;
         else if (fStakable)
             return ISMINE_STAKABLE;
+        break;
+    }
+    case TX_ZEROCOIN:
+    {
+        CPubKey p(vSolutions[0]); CBigNum c(vSolutions[1]);  CBigNum a(vSolutions[2]); CBigNum ac(vSolutions[3]);
+        CKey zk; libzeroct::BlindingCommitment bc;
+        uint256 scriptHash = Hash(scriptPubKey.begin(), scriptPubKey.end());
+        if(std::find(vMyMints.begin(), vMyMints.end(), scriptHash) != vMyMints.end())
+            return ISMINE_SPENDABLE_PRIVATE;
+        if(!keystore.GetZeroKey(zk))
+            break;
+        if(!keystore.GetBlindingCommitment(bc))
+            break;
+        if(libzeroct::PrivateCoin::QuickCheckIsMine(&Params().GetConsensus().ZeroCT_Params, zk, p, bc, c, a, ac)) {
+            vMyMints.push_back(scriptHash);
+            return ISMINE_SPENDABLE_PRIVATE;
+        }
         break;
     }
     case TX_SCRIPTHASH:

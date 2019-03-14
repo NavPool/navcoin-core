@@ -11,6 +11,7 @@
 #include "primitives/transaction.h"
 #include "script/standard.h"
 #include "uint256.h"
+#include "zerowallet.h"
 
 #include <boost/foreach.hpp>
 
@@ -18,7 +19,7 @@ using namespace std;
 
 typedef std::vector<unsigned char> valtype;
 
-TransactionSignatureCreator::TransactionSignatureCreator(const CKeyStore* keystoreIn, const CTransaction* txToIn, unsigned int nInIn, const CAmount& amountIn, int nHashTypeIn) : BaseSignatureCreator(keystoreIn), txTo(txToIn), nIn(nInIn), nHashType(nHashTypeIn), amount(amountIn), checker(txTo, nIn, amountIn) {}
+TransactionSignatureCreator::TransactionSignatureCreator(const CKeyStore* keystoreIn, const CTransaction* txToIn, unsigned int nInIn, const CAmount& amountIn, int nHashTypeIn) : BaseSignatureCreator(keystoreIn), txTo(txToIn), nIn(nInIn), nHashType(nHashTypeIn), checker(txTo, nIn, amountIn), amount(amountIn) {}
 
 bool TransactionSignatureCreator::CreateSig(std::vector<unsigned char>& vchSig, const CKeyID& address, const CScript& scriptCode, SigVersion sigversion) const
 {
@@ -445,4 +446,64 @@ bool DummySignatureCreator::CreateSig(std::vector<unsigned char>& vchSig, const 
     vchSig[6 + 33] = 0x01;
     vchSig[6 + 33 + 32] = SIGHASH_ALL;
     return true;
+}
+
+bool DummySignatureCreator::CreateCoinSpendScript(const libzeroct::ZeroCTParams* params, const libzeroct::PublicCoin& pubCoin,
+                                            const libzeroct::Accumulator a, const uint256 blockAccumulatorHash, const libzeroct::AccumulatorWitness aw,
+                                            const CScript& scriptPubKey, CScript& scriptSig, CBigNum& r, bool fStake, std::string& strError) const
+{
+    scriptSig = CScript() << OP_ZEROCTSPEND;
+    return true;
+}
+
+bool TransactionSignatureCreator::CreateCoinSpendScript(const libzeroct::ZeroCTParams* params, const libzeroct::PublicCoin& pubCoin,
+                                                  const libzeroct::Accumulator a, const uint256 blockAccumulatorHash, const libzeroct::AccumulatorWitness aw,
+                                                  const CScript& scriptPubKey, CScript& scriptSig, CBigNum& r, bool fStake, std::string& strError) const
+{
+    try {
+        CKey zk; libzeroct::BlindingCommitment bc; libzeroct::ObfuscationValue oj; libzeroct::ObfuscationValue ok;
+
+        if (!keystore->GetZeroKey(zk)) {
+            strError = "Could not read zero key from wallet";
+            return false;
+        }
+
+        if (!keystore->GetBlindingCommitment(bc)) {
+            strError = "Could not read blinding commitment from wallet";
+            return false;
+        }
+
+        if (!keystore->GetObfuscationJ(oj)) {
+            strError = "Could not read obfuscation value j from wallet";
+            return false;
+        }
+
+        if (!keystore->GetObfuscationK(ok)) {
+            strError = "Could not read obfuscation value k from wallet";
+            return false;
+        }
+
+        libzeroct::PrivateCoin privateCoin(params, zk, pubCoin.getPubKey(), bc, pubCoin.getValue(), pubCoin.getPaymentId(), pubCoin.getAmount());
+
+        if (!privateCoin.isValid()) {
+            strError = "The private coin did not validate";
+            return false;
+        }
+
+        uint256 txhash = SignatureHash(scriptPubKey, *txTo, nIn, nHashType, amount, SIGVERSION_BASE);
+
+        libzeroct::CoinSpend cs(params, privateCoin, a, blockAccumulatorHash, aw, txhash, fStake ? libzeroct::SpendType::STAKE : libzeroct::SpendType::SPEND, oj, ok, r);
+
+        CDataStream serializedCoinSpend(SER_NETWORK, PROTOCOL_VERSION);
+        serializedCoinSpend << cs;
+        scriptSig = CScript() << OP_ZEROCTSPEND;
+        scriptSig.insert(scriptSig.end(), serializedCoinSpend.begin(), serializedCoinSpend.end());
+    }
+    catch(std::runtime_error& e) {
+        strError = e.what();
+        return false;
+    }
+
+    return true;
+
 }

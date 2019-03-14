@@ -1,5 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2015 The Bitcoin Core developers
+// Copyright (c) 2018-2019 The NavCoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -17,7 +18,6 @@
 #include "keystore.h"
 #include "main.h"
 #include "net.h"
-#include "navtech.h"
 #include "policy/policy.h"
 #include "primitives/block.h"
 #include "primitives/transaction.h"
@@ -30,6 +30,10 @@
 #include "utilmoneystr.h"
 #include "kernel.h"
 #include "pos.h"
+#include "zerochain.h"
+#include "zerowallet.h"
+#include "zeropos.h"
+#include "zerotx.h"
 
 #include <assert.h>
 
@@ -182,7 +186,7 @@ int64_t CWallet::GetStake() const
     {
         const CWalletTx* pcoin = &(*it).second;
         if (pcoin->IsCoinStake() && pcoin->GetBlocksToMaturity() > 0 && pcoin->GetDepthInMainChain() > 0)
-            nTotal += CWallet::GetCredit(*pcoin,ISMINE_SPENDABLE);
+            nTotal += CWallet::GetCredit(*pcoin,ISMINE_SPENDABLE|ISMINE_SPENDABLE_PRIVATE);
     }
     return nTotal;
 }
@@ -198,6 +202,43 @@ int64_t CWallet::GetNewMint() const
             nTotal += CWallet::GetCredit(*pcoin,ISMINE_SPENDABLE);
     }
     return nTotal;
+}
+
+uint64_t CWallet::GetZeroStakeWeight() const
+{
+    // Choose coins to use
+    int64_t nBalance = GetPrivateBalance();
+
+    if (nBalance <= nReserveBalance)
+        return 0;
+
+    set<pair<const CWalletTx*,unsigned int> > vwtxPrev;
+
+    set<pair<const CWalletTx*,unsigned int> > setCoins;
+    int64_t nValueIn = 0;
+
+    if (!SelectZeroCoinsForStaking(nBalance - nReserveBalance, GetTime(), setCoins, nValueIn))
+        return 0;
+
+    if (setCoins.empty())
+        return 0;
+
+    uint64_t nWeight = 0;
+
+    int64_t nCurrentTime = GetTime();
+
+    LOCK2(cs_main, cs_wallet);
+    BOOST_FOREACH(PAIRTYPE(const CWalletTx*, unsigned int) pcoin, setCoins)
+    {
+
+        if (!mapWallet.count(pcoin.first->GetHash()))
+            continue;
+
+        if (nCurrentTime - pcoin.first->nTime > Params().GetConsensus().nStakeMinAge)
+            nWeight += pcoin.first->vout[pcoin.second].nValue;
+    }
+
+    return nWeight;
 }
 
 uint64_t CWallet::GetStakeWeight() const
@@ -262,7 +303,9 @@ void CWallet::AvailableCoinsForStaking(vector<COutput>& vCoins, unsigned int nSp
             if (nDepth < 1)
                 continue;
 
-            for (unsigned int i = 0; i < pcoin->vout.size(); i++)
+            for (unsigned int i = 0; i < pcoin->vout.size(); i++) {
+                if (pcoin->vout[i].scriptPubKey.IsZeroCTMint())
+                    continue;
                 if (!(IsSpent(wtxid,i)) && IsMine(pcoin->vout[i]) && pcoin->vout[i].nValue >= nMinimumInputValue){
                     vCoins.push_back(COutput(pcoin, i, nDepth, true,
                                            ((IsMine(pcoin->vout[i]) & (ISMINE_SPENDABLE)) != ISMINE_NO &&
@@ -270,6 +313,86 @@ void CWallet::AvailableCoinsForStaking(vector<COutput>& vCoins, unsigned int nSp
                                            ((IsMine(pcoin->vout[i]) & (ISMINE_STAKABLE)) != ISMINE_NO &&
                                            IsColdStakingEnabled(pindexBestHeader, Params().GetConsensus()))));
                 }
+            }
+        }
+    }
+}
+
+void CWallet::AvailableZeroCoinsForStaking(vector<COutput>& vCoins, unsigned int nSpendTime) const
+{
+    vCoins.clear();
+
+    {
+        LOCK2(cs_main, cs_wallet);
+        for (map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); ++it)
+        {
+            const CWalletTx* pcoin = &(*it).second;
+            const uint256& wtxid = it->first;
+
+            // Filtering by tx timestamp instead of block timestamp may give false positives but never false negatives
+            if (pcoin->nTime + Params().GetConsensus().nStakeMinAge > nSpendTime)
+                continue;
+
+            if (pcoin->GetBlocksToMaturityZeroCT() > 0)
+                continue;
+
+            if (pcoin->isAbandoned())
+                continue;
+
+            int nDepth = pcoin->GetDepthInMainChain();
+
+            if (nDepth < 1)
+                continue;
+
+            for (unsigned int i = 0; i < pcoin->vout.size(); i++)
+            {
+                if (!pcoin->vout[i].scriptPubKey.IsZeroCTMint())
+                    continue;
+
+                libzeroct::PublicCoin pubCoin(&Params().GetConsensus().ZeroCT_Params);
+
+                if (!TxOutToPublicCoin(&Params().GetConsensus().ZeroCT_Params, pcoin->vout[i], pubCoin, NULL))
+                    continue;
+
+                bool fFoundWitness = false;
+
+                {
+                    LOCK(pwalletMain->cs_witnesser);
+                    if (pwalletMain->mapWitness.count(pubCoin.getValue())) {
+
+                        PublicMintWitnessData witnessData = pwalletMain->mapWitness.at(pubCoin.getValue());
+
+                        if (witnessData.GetCount() > (GetArg("-defaultsecuritylevel", DEFAULT_SPEND_MIN_MINT_COUNT)-1))
+                            fFoundWitness = true;
+
+                    }
+                }
+
+                if (!fFoundWitness && GetArg("-enablewitnesser",true))
+                    continue;
+
+                CKey zk; libzeroct::BlindingCommitment bc;
+                libzeroct::ObfuscationValue oj;
+
+                if(!GetZeroKey(zk))
+                    break;
+
+                if(!GetBlindingCommitment(bc))
+                    break;
+
+                if(!GetObfuscationJ(oj))
+                    break;
+
+                libzeroct::PrivateCoin privateCoin(&Params().GetConsensus().ZeroCT_Params, zk, pubCoin.getPubKey(), bc, pubCoin.getValue(),
+                                       pubCoin.getPaymentId(), pubCoin.getAmount(), false);
+
+                if (!(IsSpent(wtxid,i)) && IsMine(pcoin->vout[i]) && privateCoin.getAmount() >= nMinimumInputValue && pcoin->vout[i].IsZeroCTMint()){
+                    vCoins.push_back(COutput(pcoin, i, nDepth, true,
+                                           ((IsMine(pcoin->vout[i]) & (ISMINE_SPENDABLE_PRIVATE)) != ISMINE_NO &&
+                                           IsZeroCTEnabled(pindexBestHeader, Params().GetConsensus())), "", privateCoin.getAmount()));
+                }
+
+            }
         }
     }
 }
@@ -294,6 +417,9 @@ bool CWallet::SelectCoinsForStaking(int64_t nTargetValue, unsigned int nSpendTim
 
         int64_t n = pcoin->vout[i].nValue;
 
+        if (pcoin->vout[i].scriptPubKey.IsZeroCTMint())
+            continue;
+
         pair<int64_t,pair<const CWalletTx*,unsigned int> > coin = make_pair(n,make_pair(pcoin, i));
 
         if (n >= nTargetValue)
@@ -314,11 +440,52 @@ bool CWallet::SelectCoinsForStaking(int64_t nTargetValue, unsigned int nSpendTim
     return true;
 }
 
-bool CWallet::CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int64_t nSearchInterval, int64_t nFees, CMutableTransaction& txNew, CKey& key)
+// Select some coins without random shuffle or best subset approximation
+bool CWallet::SelectZeroCoinsForStaking(int64_t nTargetValue, unsigned int nSpendTime, set<pair<const CWalletTx*,unsigned int> >& setCoinsRet, int64_t& nValueRet) const
+{
+    vector<COutput> vCoins;
+    AvailableZeroCoinsForStaking(vCoins, nSpendTime);
+    setCoinsRet.clear();
+    nValueRet = 0;
+
+    BOOST_FOREACH(COutput output, vCoins)
+    {
+        const CWalletTx *pcoin = output.tx;
+        int i = output.i;
+
+        // Stop if we've chosen enough inputs
+        if (nValueRet >= nTargetValue)
+            break;
+
+        int64_t n = output.nAmount;
+
+        pair<int64_t,pair<const CWalletTx*,unsigned int> > coin = make_pair(n,make_pair(pcoin, i));
+
+        if (n >= nTargetValue)
+        {
+            // If input value is greater or equal to target then simply insert
+            //    it into the current subset and exit
+            setCoinsRet.insert(coin.second);
+            nValueRet += coin.first;
+            break;
+        }
+        else if (n < nTargetValue + CENT)
+        {
+            setCoinsRet.insert(coin.second);
+            nValueRet += coin.first;
+        }
+    }
+
+    return true;
+}
+
+bool CWallet::CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int64_t nSearchInterval, int64_t nFees, int64_t nPrivateFees, CMutableTransaction& txNew, CKey& key, CBigNum& serialNumberPrivKey, std::string sCoinStakeStrDZeel, CBigNum& r_minus_gamma)
 {
     CBlockIndex* pindexPrev = chainActive.Tip();
-    arith_uint256 bnTargetPerCoinDay;
+    uint256 bnTargetPerCoinDay;
     bnTargetPerCoinDay.SetCompact(nBits);
+
+    uint64_t nTimeStart = GetTimeMicros();
 
     txNew.vin.clear();
     txNew.vout.clear();
@@ -330,6 +497,7 @@ bool CWallet::CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int
 
     // Choose coins to use
     int64_t nBalance = GetBalance() + GetColdStakingBalance();
+    int64_t nPrivateBalance = GetPrivateBalance();
 
     if (nBalance <= nReserveBalance)
         return false;
@@ -339,131 +507,177 @@ bool CWallet::CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int
     set<pair<const CWalletTx*,unsigned int> > setCoins;
     int64_t nValueIn = 0;
 
+    set<pair<const CWalletTx*,unsigned int> > setZeroCoins;
+    int64_t nZeroValueIn = 0;
+
     // Select coins with suitable depth
     if (!SelectCoinsForStaking(nBalance - nReserveBalance, txNew.nTime, setCoins, nValueIn))
         return false;
 
-    if (setCoins.empty())
+    // Select zerocoins with suitable depth
+    if (!SelectZeroCoinsForStaking(nBalance - nReserveBalance, txNew.nTime, setZeroCoins, nZeroValueIn))
+        return false;
+
+    if (setCoins.empty() && setZeroCoins.empty())
         return false;
 
     int64_t nCredit = 0;
     CScript scriptPubKeyKernel;
-    BOOST_FOREACH(PAIRTYPE(const CWalletTx*, unsigned int) pcoin, setCoins)
+    bool fKernelFound = false;
+    bool fZeroKernelFound = false;
+    uint256 hashProofOfStake, targetProofOfStake;
+    BOOST_FOREACH(PAIRTYPE(const CWalletTx*, unsigned int) pcoin, setZeroCoins)
     {
         static int nMaxStakeSearchInterval = 60;
-        bool fKernelFound = false;
-        for (unsigned int n=0; n<min(nSearchInterval,(int64_t)nMaxStakeSearchInterval) && !fKernelFound && pindexPrev == pindexBestHeader; n++)
+        for (unsigned int n=0; n<min(nSearchInterval,(int64_t)nMaxStakeSearchInterval) && !fZeroKernelFound && pindexPrev == chainActive.Tip(); n++)
         {
             boost::this_thread::interruption_point();
             // Search backward in time from the given txNew timestamp
             // Search nSearchInterval seconds back up to nMaxStakeSearchInterval
             COutPoint prevoutStake = COutPoint(pcoin.first->GetHash(), pcoin.second);
             int64_t nBlockTime;
-            if (CheckKernel(pindexPrev, nBits, txNew.nTime - n, prevoutStake, &nBlockTime))
+            CAmount nValue;
+            if (CheckZeroKernel(pindexPrev, pcoinsTip, nBits, txNew.nTime - n, prevoutStake, &nBlockTime, nValue, hashProofOfStake, targetProofOfStake))
             {
                 // Found a kernel
-                LogPrint("coinstake", "CreateCoinStake : kernel found\n");
-                vector<std::vector<unsigned char>> vSolutions;
-                txnouttype whichType;
+                LogPrint("coinstake", "%s : kernel found\n", __func__);
                 CScript scriptPubKeyOut;
                 scriptPubKeyKernel = pcoin.first->vout[pcoin.second].scriptPubKey;
-                if (!Solver(scriptPubKeyKernel, whichType, vSolutions))
-                {
-                    LogPrint("coinstake", "CreateCoinStake : failed to parse kernel\n");
-                    break;
-                }
-                LogPrint("coinstake", "CreateCoinStake : parsed kernel type=%d\n", whichType);
-                if (whichType != TX_PUBKEY && whichType != TX_PUBKEYHASH && whichType != TX_COLDSTAKING)
-                {
-                    LogPrint("coinstake", "CreateCoinStake : no support for kernel type=%d\n", whichType);
-                    break;  // only support pay to public key and pay to address
-                }
-                if (whichType == TX_COLDSTAKING) // cold staking
-                {
-                    // try to find staking key
-                    if (!keystore.GetKey(uint160(vSolutions[0]), key))
-                    {
-                        LogPrint("coinstake", "CreateCoinStake : failed to get key for kernel type=%d\n", whichType);
-                        break;  // unable to find corresponding public key
-                    } else {
-                        // we keep the same script
-                        scriptPubKeyOut = scriptPubKeyKernel;
-                    }
-                }
-                if (whichType == TX_PUBKEYHASH) // pay to address type
-                {
-                    // convert to pay to public key type
-                    if (!keystore.GetKey(uint160(vSolutions[0]), key))
-                    {
-                        LogPrint("coinstake", "CreateCoinStake : failed to get key for kernel type=%d\n", whichType);
-                        break;  // unable to find corresponding public key
-                    }
-                    scriptPubKeyOut << ToByteVector(key.GetPubKey()) << OP_CHECKSIG;
-                }
-                if (whichType == TX_PUBKEY)
-                {
-                    std::vector<unsigned char>& vchPubKey = vSolutions[0];
-                    if (!keystore.GetKey(Hash160(vchPubKey), key))
-                    {
-                        LogPrint("coinstake", "CreateCoinStake : failed to get key for kernel type=%d\n", whichType);
-                        break;  // unable to find corresponding public key
-                    }
-
-                    if (key.GetPubKey() != vchPubKey)
-                    {
-                        LogPrint("coinstake", "CreateCoinStake : invalid key for kernel type=%d\n", whichType);
-                        break; // keys mismatch
-                    }
-
-                    scriptPubKeyOut = scriptPubKeyKernel;
-                }
 
                 txNew.nTime -= n;
-                txNew.vin.push_back(CTxIn(pcoin.first->GetHash(), pcoin.second));
-                nCredit += pcoin.first->vout[pcoin.second].nValue;
+                txNew.vin.push_back(CTxIn());
+                nCredit += nValue;
                 vwtxPrev.insert(make_pair(pcoin.first,pcoin.second));
-                txNew.vout.push_back(CTxOut(0, scriptPubKeyOut));
 
-                LogPrint("coinstake", "CreateCoinStake : added kernel type=%d\n", whichType);
-                fKernelFound = true;
+                fZeroKernelFound = true;
                 break;
-
             }
 
         }
 
-        if (fKernelFound)
+        if (fZeroKernelFound)
             break; // if kernel is found stop searching
     }
 
-    if (nCredit == 0 || nCredit > nBalance - nReserveBalance)
-        return false;
-
-    BOOST_FOREACH(PAIRTYPE(const CWalletTx*, unsigned int) pcoin, setCoins)
-    {
-        // Attempt to add more inputs
-        // Only add coins of the same key/address as kernel
-        if (txNew.vout.size() == 2 && ((pcoin.first->vout[pcoin.second].scriptPubKey == scriptPubKeyKernel || pcoin.first->vout[pcoin.second].scriptPubKey == txNew.vout[1].scriptPubKey))
-            && pcoin.first->GetHash() != txNew.vin[0].prevout.hash)
+    if (!fZeroKernelFound) {
+        BOOST_FOREACH(PAIRTYPE(const CWalletTx*, unsigned int) pcoin, setCoins)
         {
-            int64_t nTimeWeight = GetWeight((int64_t)pcoin.first->nTime, (int64_t)txNew.nTime);
+            static int nMaxStakeSearchInterval = 60;
+            for (unsigned int n=0; n<min(nSearchInterval,(int64_t)nMaxStakeSearchInterval) && !fKernelFound && pindexPrev == pindexBestHeader; n++)
+            {
+                boost::this_thread::interruption_point();
+                // Search backward in time from the given txNew timestamp
+                // Search nSearchInterval seconds back up to nMaxStakeSearchInterval
+                COutPoint prevoutStake = COutPoint(pcoin.first->GetHash(), pcoin.second);
+                int64_t nBlockTime;
+                if (CheckKernel(pindexPrev, pcoinsTip, nBits, txNew.nTime - n, prevoutStake, &nBlockTime))
+                {
+                    // Found a kernel
+                    LogPrint("coinstake", "%s : kernel found\n", __func__);
+                    vector<std::vector<unsigned char>> vSolutions;
+                    txnouttype whichType;
+                    CScript scriptPubKeyOut;
+                    scriptPubKeyKernel = pcoin.first->vout[pcoin.second].scriptPubKey;
+                    if (!Solver(scriptPubKeyKernel, whichType, vSolutions))
+                    {
+                        LogPrint("coinstake", "%s : failed to parse kernel\n", __func__);
+                        break;
+                    }
+                    LogPrint("coinstake", "CreateCoinStake : parsed kernel type=%d\n", whichType);
+                    if (whichType != TX_PUBKEY && whichType != TX_PUBKEYHASH && whichType != TX_COLDSTAKING)
+                    {
+                        LogPrint("coinstake", "%s : no support for kernel type=%d\n", __func__, whichType);
+                        break;  // only support pay to public key and pay to address
+                    }
+                    if (whichType == TX_COLDSTAKING) // cold staking
+                    {
+                        // try to find staking key
+                        if (!keystore.GetKey(uint160(vSolutions[0]), key))
+                        {
+                            LogPrint("coinstake", "%s : failed to get key for kernel type=%d\n", __func__, whichType);
+                            break;  // unable to find corresponding public key
+                        } else {
+                            // we keep the same script
+                            scriptPubKeyOut = scriptPubKeyKernel;
+                        }
+                    }
+                    if (whichType == TX_PUBKEYHASH) // pay to address type
+                    {
+                        // convert to pay to public key type
+                        if (!keystore.GetKey(uint160(vSolutions[0]), key))
+                        {
+                            LogPrint("coinstake", "%s : failed to get key for kernel type=%d\n", __func__, whichType);
+                            break;  // unable to find corresponding public key
+                        }
+                        scriptPubKeyOut << ToByteVector(key.GetPubKey()) << OP_CHECKSIG;
+                    }
+                    if (whichType == TX_PUBKEY)
+                    {
+                        std::vector<unsigned char>& vchPubKey = vSolutions[0];
+                        if (!keystore.GetKey(Hash160(vchPubKey), key))
+                        {
+                            LogPrint("coinstake", "%s : failed to get key for kernel type=%d\n", __func__, whichType);
+                            break;  // unable to find corresponding public key
+                        }
 
-            // Stop adding more inputs if already too many inputs
-            if (txNew.vin.size() >= 100)
-                break;
-            // Stop adding inputs if reached reserve limit
-            if (nCredit + pcoin.first->vout[pcoin.second].nValue > nBalance - nReserveBalance)
-                break;
-            // Do not add additional significant input
-            if (pcoin.first->vout[pcoin.second].nValue >= Params().GetConsensus().nStakeCombineThreshold)
-                continue;
-            // Do not add input that is still too young
-            if (nTimeWeight < Params().GetConsensus().nStakeMinAge)
-                continue;
+                        if (key.GetPubKey() != vchPubKey)
+                        {
+                            LogPrint("coinstake", "%s : invalid key for kernel type=%d\n", __func__, whichType);
+                            break; // keys mismatch
+                        }
 
-            txNew.vin.push_back(CTxIn(pcoin.first->GetHash(), pcoin.second));
-            nCredit += pcoin.first->vout[pcoin.second].nValue;
-            vwtxPrev.insert(make_pair(pcoin.first,pcoin.second));
+                        scriptPubKeyOut = scriptPubKeyKernel;
+                    }
+
+                    txNew.nTime -= n;
+                    txNew.vin.push_back(CTxIn(pcoin.first->GetHash(), pcoin.second));
+                    nCredit += pcoin.first->vout[pcoin.second].nValue;
+                    vwtxPrev.insert(make_pair(pcoin.first,pcoin.second));
+                    txNew.vout.push_back(CTxOut(0, scriptPubKeyOut));
+
+                    LogPrint("coinstake", "%s : added kernel type=%d\n", __func__, whichType);
+                    fKernelFound = true;
+                    break;
+
+                }
+
+            }
+
+            if (fKernelFound)
+                break; // if kernel is found stop searching
+        }
+    }
+
+    if (nCredit == 0 || (fKernelFound && nCredit > nBalance - nReserveBalance) || (fZeroKernelFound && nCredit > nPrivateBalance - nReserveBalance))
+        return error("CreateCoinStake : did not find a stake");
+
+    if (fKernelFound) {
+        BOOST_FOREACH(PAIRTYPE(const CWalletTx*, unsigned int) pcoin, setCoins)
+        {
+            // Attempt to add more inputs
+            // Only add coins of the same key/address as kernel
+            if (txNew.vout.size() == 2 && ((pcoin.first->vout[pcoin.second].scriptPubKey == scriptPubKeyKernel || pcoin.first->vout[pcoin.second].scriptPubKey == txNew.vout[1].scriptPubKey))
+                    && pcoin.first->GetHash() != txNew.vin[0].prevout.hash)
+            {
+                int64_t nTimeWeight = GetWeight((int64_t)pcoin.first->nTime, (int64_t)txNew.nTime);
+
+                // Stop adding more inputs if already too many inputs
+                if (txNew.vin.size() >= 100)
+                    break;
+                // Stop adding inputs if reached reserve limit
+                if (nCredit + pcoin.first->vout[pcoin.second].nValue > nBalance - nReserveBalance)
+                    break;
+                // Do not add additional significant input
+                if (pcoin.first->vout[pcoin.second].nValue >= Params().GetConsensus().nStakeCombineThreshold)
+                    continue;
+                // Do not add input that is still too young
+                if (nTimeWeight < Params().GetConsensus().nStakeMinAge)
+                    continue;
+
+                txNew.vin.push_back(CTxIn(pcoin.first->GetHash(), pcoin.second));
+                nCredit += pcoin.first->vout[pcoin.second].nValue;
+                vwtxPrev.insert(make_pair(pcoin.first,pcoin.second));
+            }
         }
     }
 
@@ -472,80 +686,102 @@ bool CWallet::CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int
     {
         uint64_t nCoinAge;
         CTransaction ptxNew = CTransaction(txNew);
-        if (!TransactionGetCoinAge(ptxNew, nCoinAge))
-            return error("CreateCoinStake : failed to calculate coin age");
+        CCoinsViewCache view(pcoinsTip);
 
-        nReward = GetProofOfStakeReward(pindexPrev->nHeight + 1, nCoinAge, nFees, pindexBestHeader);
+        if (!TransactionGetCoinAge(ptxNew, nCoinAge, view))
+            return error("%s : failed to calculate coin age", __func__);
+
+        nReward = GetProofOfStakeReward(pindexPrev->nHeight + 1, nCoinAge, fZeroKernelFound ? nPrivateFees : nFees, pindexBestHeader);
         if (nReward <= 0)
-            return false;
-
-        nCredit += nReward;
+            return error("%s : no reward", __func__);
     }
 
-    if (nCredit >= Params().GetConsensus().nStakeSplitThreshold)
-        txNew.vout.push_back(CTxOut(0, txNew.vout[1].scriptPubKey)); //split stake
+    CBN_vector txValues;
+    CBN_vector txGammas;
 
-    // Inode Payments
-    int payments = 1;
-    // start inode payments
-    bool bINodePayment = false; // note was false, set true to test
+    txNew.nVersion = IsCommunityFundEnabled(pindexBestHeader,Params().GetConsensus()) ? CTransaction::TXDZEEL_VERSION_V2 : CTransaction::TXDZEEL_VERSION;
+    txNew.strDZeel = sCoinStakeStrDZeel == "" ?
+                GetArg("-stakervote","") + ";" + std::to_string(CLIENT_VERSION) :
+                sCoinStakeStrDZeel;
 
+    if (fZeroKernelFound)
+    {
+        CKey zk; libzeroct::BlindingCommitment bc;
+        pwalletMain->GetBlindingCommitment(bc);
+        pwalletMain->GetZeroKey(zk);
 
-    CScript payee;
-    bool hasPayment = false;
-    if(bINodePayment) {
-        //hub
-        // if(!inodePayments.GetBlockPayee(pindexPrev->nHeight+1, payee)){
-        //     int winningNode = GetCurrentINode(1);
-        //         if(winningNode >= 0){
-        //             payee =GetScriptForDestination(vecInodes[winningNode].pubkey.GetID());
-        //         } else {
-        //             LogPrintf("CreateCoinStake: Failed to detect inode to pay\n");
-        //             hasPayment = false;
-        //         }
-        // }
+        txNew.nVersion |= ZEROCT_TX_VERSION_FLAG;
+
+        if (nCredit >= Params().GetConsensus().nStakeSplitThreshold)
+        {
+            libzeroct::CPrivateAddress pa(&Params().GetConsensus().ZeroCT_Params,bc,zk);
+
+            CAmount nHalfAmount = ((nCredit+nReward) / 2 / CENT) * CENT;
+
+            std::vector<CRecipient> vecStake;
+
+            pa.SetPaymentId("Staking");
+            pa.SetAmount(nHalfAmount);
+
+            if (!DestinationToVecRecipients(nHalfAmount, pa, vecStake, false, false, false)) {
+                return false;
+            }
+
+            txNew.vout.push_back(CTxOut(0, vecStake[0].scriptPubKey));
+
+            txValues.push_back(vecStake[0].nAmount);
+            txGammas.push_back(vecStake[0].gamma);
+
+            vecStake.clear();
+
+            pa.SetPaymentId("Staking");
+            pa.SetAmount((nCredit+nReward)-nHalfAmount);
+
+            if (!DestinationToVecRecipients((nCredit+nReward)-nHalfAmount, pa, vecStake, false, false, false)) {
+                return false;
+            }
+
+            txNew.vout.push_back(CTxOut(0, vecStake[0].scriptPubKey));
+
+            txValues.push_back(vecStake[0].nAmount);
+            txGammas.push_back(vecStake[0].gamma);
+        }
+        else
+        {
+            libzeroct::CPrivateAddress pa(&Params().GetConsensus().ZeroCT_Params,bc,zk);
+
+            std::vector<CRecipient> vecStake;
+
+            pa.SetPaymentId("Staking");
+            pa.SetAmount(nCredit+nReward);
+
+            if (!DestinationToVecRecipients(nCredit+nReward, pa, vecStake, false, false, false)) {
+                return false;
+            }
+
+            txNew.vout.push_back(CTxOut(0, vecStake[0].scriptPubKey));
+
+            txValues.push_back(vecStake[0].nAmount);
+            txGammas.push_back(vecStake[0].gamma);
+        }
     }
 
-    if(hasPayment){
-        payments = txNew.vout.size() + 1;
-        txNew.vout.resize(payments);
-
-        txNew.vout[payments-1].scriptPubKey = payee;
-        txNew.vout[payments-1].nValue = 0;
-
-        CTxDestination address1;
-        ExtractDestination(payee, address1);
-        CNavCoinAddress address2(address1);
-
-        LogPrintf("Inode payment to %s\n", address2.ToString().c_str());
-    }
-
-    int64_t blockValue = nCredit;
-    int64_t inodePayment = 0; //GetInodePayment(pindexPrev->nHeight+1, nReward);
-
+    int64_t blockValue = (nCredit+nReward);
 
     // Set output amount
-    if (!hasPayment && txNew.vout.size() == 3) // 2 stake outputs, stake was split, no inode payment
-    {
-        txNew.vout[1].nValue = (blockValue / 2 / CENT) * CENT;
-        txNew.vout[2].nValue = blockValue - txNew.vout[1].nValue;
-    }
-    else if(hasPayment && txNew.vout.size() == 4) // 2 stake outputs, stake was split, plus a inode payment
-    {
-        txNew.vout[payments-1].nValue = inodePayment;
-        blockValue -= inodePayment;
-        txNew.vout[1].nValue = (blockValue / 2 / CENT) * CENT;
-        txNew.vout[2].nValue = blockValue - txNew.vout[1].nValue;
-    }
-    else if(!hasPayment && txNew.vout.size() == 2) // only 1 stake output, was not split, no inode payment
-        txNew.vout[1].nValue = blockValue;
-    else if(hasPayment && txNew.vout.size() == 3) // only 1 stake output, was not split, plus a inode payment
-    {
-        txNew.vout[payments-1].nValue = inodePayment;
-        blockValue -= inodePayment;
-        txNew.vout[1].nValue = blockValue;
+    if (fKernelFound) {
+        if (nCredit >= Params().GetConsensus().nStakeSplitThreshold)
+            txNew.vout.push_back(CTxOut(0, txNew.vout[1].scriptPubKey)); //split stake
+        if (txNew.vout.size() == 3) // 2 stake outputs, stake was split, no inode payment
+        {
+            txNew.vout[1].nValue = (blockValue / 2 / CENT) * CENT;
+            txNew.vout[2].nValue = blockValue - txNew.vout[1].nValue;
+        }
+        else if(txNew.vout.size() == 2) // only 1 stake output, was not split, no inode payment
+            txNew.vout[1].nValue = blockValue;
     }
 
+    CAmount nCFundContribution;
     // Adds Community Fund output if enabled
     if(IsCommunityFundAccumulationEnabled(pindexPrev, Params().GetConsensus(), false))
     {
@@ -559,9 +795,12 @@ bool CWallet::CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int
 
                 if(IsCommunityFundAmountV2Enabled(pindexPrev, Params().GetConsensus())) {
                     txNew.vout[fundIndex-1].nValue = Params().GetConsensus().nCommunityFundAmountV2 * Params().GetConsensus().nBlockSpreadCFundAccumulation;
+                    nCFundContribution = txNew.vout[fundIndex-1].nValue;
                 } else {
                     txNew.vout[fundIndex-1].nValue = Params().GetConsensus().nCommunityFundAmount * Params().GetConsensus().nBlockSpreadCFundAccumulation;
+                    nCFundContribution = txNew.vout[fundIndex-1].nValue;
                 }
+
             }
         }
         else
@@ -572,29 +811,148 @@ bool CWallet::CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int
 
              if(IsCommunityFundAmountV2Enabled(pindexPrev, Params().GetConsensus())) {
                 txNew.vout[fundIndex-1].nValue = Params().GetConsensus().nCommunityFundAmountV2;
+                nCFundContribution = txNew.vout[fundIndex-1].nValue;
              } else {
                 txNew.vout[fundIndex-1].nValue = Params().GetConsensus().nCommunityFundAmount;
+                nCFundContribution = txNew.vout[fundIndex-1].nValue;
              }
         }
     }
-
-    txNew.nVersion = IsCommunityFundEnabled(pindexBestHeader,Params().GetConsensus()) ? CTransaction::TXDZEEL_VERSION_V2 : CTransaction::TXDZEEL_VERSION;
 
     // Sign
     int nIn = 0;
     CTransaction txNewConst(txNew);
     BOOST_FOREACH(const PAIRTYPE(const CWalletTx*,unsigned int)& coin, vwtxPrev)
     {
-        bool signSuccess;
+        bool signSuccess = false;
         const CScript& scriptPubKey = coin.first->vout[coin.second].scriptPubKey;
         SignatureData sigdata;
-        signSuccess = ProduceSignature(TransactionSignatureCreator(this, &txNewConst, nIn, coin.first->vout[coin.second].nValue, SIGHASH_ALL), scriptPubKey, sigdata, true);
+        CBigNum gamma_sum = 0;
+        CBN_vector values;
+        CBN_vector gammas;
+
+        if (fZeroKernelFound)
+        {
+            {
+                CCoinsViewCache view(pcoinsTip);
+
+                signSuccess = ProduceCoinSpend(TransactionSignatureCreator(this, &txNewConst, nIn,
+                                                                           nCredit, SIGHASH_ALL), mapWitness, view, scriptPubKey, sigdata,
+                                               true, nCredit);
+            }
+
+            libzeroct::PublicCoin pubCoin(&Params().GetConsensus().ZeroCT_Params);
+
+            if (!TxOutToPublicCoin(&Params().GetConsensus().ZeroCT_Params, coin.first->vout[coin.second], pubCoin))
+                return error("%s : Could not convert tx out to public coin");
+
+            CKey zk; libzeroct::BlindingCommitment bc; libzeroct::ObfuscationValue oj;
+
+            if (!GetZeroKey(zk))
+                return error("%s : Could not read zero key from wallet", __func__);
+
+            if (!GetBlindingCommitment(bc))
+                return error("%s : Could not read blinding commitment from wallet", __func__);
+
+            if (!GetObfuscationJ(oj))
+                return error("%s : Could not read obfuscation value j from wallet", __func__);
+
+            libzeroct::PrivateCoin privateCoin(&Params().GetConsensus().ZeroCT_Params, zk, pubCoin.getPubKey(), bc, pubCoin.getValue(), pubCoin.getPaymentId(), pubCoin.getAmount());
+
+            if (!privateCoin.isValid()) {
+                return error("%s : The private coin did not validate", __func__);
+            }
+
+            serialNumberPrivKey = privateCoin.getPrivateSerialNumber(oj);
+
+            const libzeroct::IntegerGroupParams* paramsHk = &Params().GetConsensus().ZeroCT_Params.coinCommitmentGroup;
+            const libzeroct::IntegerGroupParams* paramsCg = &Params().GetConsensus().ZeroCT_Params.coinCommitmentGroup;
+            CBigNum q = paramsHk->groupOrder;
+
+            values.push_back((CBigNum(nCredit).mul_mod(CBigNum(targetProofOfStake), q) - CBigNum(hashProofOfStake)) % q);
+            gammas.push_back(sigdata.r.mul_mod(CBigNum(targetProofOfStake),q));
+
+            BulletproofsRangeproof bphk(paramsHk);
+            bphk.Prove(values, gammas, KERNEL_PROOF_BITS);
+
+//            CBN_matrix mValueCommitments;
+//            CBN_vector valueCommitments = bphk.GetValueCommitments();
+
+//            LogPrintf("proved %s\n", toStringVector(valueCommitments));
+//            mValueCommitments.push_back(valueCommitments);
+
+//            std::vector<BulletproofsRangeproof> proofs;
+
+//            proofs.push_back(bphk);
+
+//            if (!VerifyBulletproof(paramsHk, proofs, mValueCommitments, KERNEL_PROOF_BITS))
+//                return error("%s : Could not verify the CoinStake kernel hash range proof", __func__);
+
+            CDataStream serializedRangeProofKernelHash(SER_NETWORK, PROTOCOL_VERSION);
+            serializedRangeProofKernelHash << bphk;
+
+            txNew.vchKernelHashProof.clear();
+            txNew.vchKernelHashProof.insert(txNew.vchKernelHashProof.end(), serializedRangeProofKernelHash.begin(), serializedRangeProofKernelHash.end());
+
+            BulletproofsRangeproof bprp(paramsCg);
+            bprp.Prove(txValues, txGammas);
+
+//            mValueCommitments.clear();
+//            valueCommitments = bprp.GetValueCommitments();
+//            mValueCommitments.push_back(valueCommitments);
+
+//            proofs.clear();
+//            proofs.push_back(bprp);
+
+//            if (!VerifyBulletproof(paramsCg, proofs, mValueCommitments))
+//                return error("%s : Could not verify the CoinStake range proof", __func__);
+
+            CDataStream serializedRangeProof(SER_NETWORK, PROTOCOL_VERSION);
+            serializedRangeProof << bprp;
+
+            txNew.vchRangeProof.clear();
+            txNew.vchRangeProof.insert(txNew.vchRangeProof.end(), serializedRangeProof.begin(), serializedRangeProof.end());
+        }
+        else
+            signSuccess = ProduceSignature(TransactionSignatureCreator(this, &txNewConst, nIn, coin.first->vout[coin.second].nValue, SIGHASH_ALL), scriptPubKey, sigdata, true);
 
         if (!signSuccess)
         {
-            return error("Signing transaction failed");
-        } else {
+            return error("%s : Signing transaction failed", __func__);
+        }
+        else
+        {
             UpdateTransaction(txNew, nIn, sigdata);
+        }
+
+        if (fZeroKernelFound) {
+            const libzeroct::ZeroCTParams* params = &Params().GetConsensus().ZeroCT_Params;
+            const libzeroct::IntegerGroupParams* group = &params->coinCommitmentGroup;
+
+            for (unsigned int i = 0; i < gammas.size(); i++)
+            {
+                gammas[i].Nullify();
+            }
+            for (unsigned int i = 0; i < values.size(); i++)
+            {
+                values[i].Nullify();
+            }
+            for (unsigned int i = 0; i < txValues.size(); i++)
+            {
+                txValues[i].Nullify();
+            }
+            for (unsigned int i = 0; i < txGammas.size(); i++)
+            {
+                gamma_sum = (gamma_sum + txGammas[i]) % group->groupOrder;
+                txGammas[i].Nullify();
+            }
+
+            r_minus_gamma = sigdata.r - gamma_sum;
+
+            gamma_sum.Nullify();
+            sigdata.r.Nullify();
+
+            break;
         }
 
         nIn++;
@@ -603,9 +961,11 @@ bool CWallet::CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int
     // Limit size
     unsigned int nBytes = ::GetSerializeSize(txNew, SER_NETWORK, PROTOCOL_VERSION);
     if (nBytes >= MAX_BLOCK_SIZE_GEN/5)
-        return error("CreateCoinStake : exceeded coinstake size limit");
+        return error("%s : exceeded coinstake size limit", __func__);
 
-    LogPrint("coinstake", "Created coin stake\n");
+    uint64_t nTimeEnd = GetTimeMicros();
+
+    LogPrint("coinstake", "Created coin stake (took %.3fms)\n", (nTimeEnd-nTimeStart)*0.001);
 
     // Successfully generated coinstake
     return true;
@@ -954,6 +1314,8 @@ void CWallet::SyncMetaData(pair<TxSpends::iterator, TxSpends::iterator> range)
         if (!copyFrom->IsEquivalentTo(*copyTo)) continue;
         copyTo->mapValue = copyFrom->mapValue;
         copyTo->vOrderForm = copyFrom->vOrderForm;
+        copyTo->vPaymentIds = copyFrom->vPaymentIds;
+        copyTo->vAmounts = copyFrom->vAmounts;
         // fTimeReceivedIsTxTime not copied on purpose
         // nTimeReceived not copied on purpose
         copyTo->nTimeSmart = copyFrom->nTimeSmart;
@@ -977,6 +1339,8 @@ bool CWallet::IsSpent(const uint256& hash, unsigned int n) const
     for (TxSpends::const_iterator it = range.first; it != range.second; ++it)
     {
         const uint256& wtxid = it->second;
+        if(it->first.n != n)
+            continue;
         std::map<uint256, CWalletTx>::const_iterator mit = mapWallet.find(wtxid);
         if (mit != mapWallet.end()) {
             int depth = mit->second.GetDepthInMainChain();
@@ -1001,11 +1365,21 @@ void CWallet::AddToSpends(const uint256& wtxid)
 {
     assert(mapWallet.count(wtxid));
     CWalletTx& thisTx = mapWallet[wtxid];
-    if (thisTx.IsCoinBase()) // Coinbases don't spend anything!
+
+    if (thisTx.IsCoinBase() && !thisTx.IsZeroCTSpend()) // Coinbases don't spend anything!
         return;
 
-    BOOST_FOREACH(const CTxIn& txin, thisTx.vin)
-        AddToSpends(txin.prevout, wtxid);
+    BOOST_FOREACH(const CTxIn& txin, thisTx.vin) {
+        COutPoint prevout = txin.prevout;
+        if (txin.scriptSig.IsZeroCTSpend()) {
+            libzeroct::CoinSpend zcs(&Params().GetConsensus().ZeroCT_Params);
+            assert(TxInToCoinSpend(&Params().GetConsensus().ZeroCT_Params, txin, zcs));
+            if(!mapSerial.count(zcs.getCoinSerialNumber()))
+                continue;
+            prevout = mapSerial.at(zcs.getCoinSerialNumber());
+        }
+        AddToSpends(prevout, wtxid);
+    }
 }
 
 bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
@@ -1057,7 +1431,7 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
             pwalletdbEncryption->WriteMasterKey(nMasterKeyMaxID, kMasterKey);
         }
 
-        if (!EncryptKeys(vMasterKey))
+        if (!EncryptKeys(vMasterKey) || !EncryptZeroParameters(vMasterKey))
         {
             if (fFileBacked) {
                 pwalletdbEncryption->TxnAbort();
@@ -1067,6 +1441,11 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
             // die and let the user reload the unencrypted wallet.
             assert(false);
         }
+
+        pwalletdbEncryption->WriteZeroCTValues(this);
+
+        LogPrintf("Encrypted ZeroCT parameters written\n");
+
 
         // Encryption was introduced in version 0.4.0
         SetMinVersion(FEATURE_WALLETCRYPT, pwalletdbEncryption, true);
@@ -1201,6 +1580,35 @@ void CWallet::MarkDirty()
     }
 }
 
+bool CWallet::WriteSerial(const CBigNum& bnSerialNumber, COutPoint& out)
+{
+    AssertLockHeld(cs_wallet);
+
+    mapSerial[bnSerialNumber] = out;
+
+    CWalletDB walletdb(strWalletFile);
+
+    return walletdb.WriteSerialNumber(bnSerialNumber, out);
+}
+
+bool CWallet::WriteWitness(const CBigNum& bnCoinValue, PublicMintWitnessData& witness)
+{
+    AssertLockHeld(cs_wallet);
+    AssertLockHeld(cs_witnesser);
+
+    std::pair<std::map<CBigNum, PublicMintWitnessData>::iterator, bool> ret = mapWitness.insert(std::make_pair(bnCoinValue, witness));
+
+    if (!ret.second) {
+        mapWitness.erase(bnCoinValue);
+        ret = mapWitness.insert(std::make_pair(bnCoinValue, witness));
+        assert(ret.second);
+    }
+
+    CWalletDB walletdb(strWalletFile);
+
+    return walletdb.WriteWitnessData(bnCoinValue, witness);
+}
+
 bool CWallet::AddToWallet(const CWalletTx& wtxIn, bool fFromLoadWallet, CWalletDB* pwalletdb)
 {
     uint256 hash = wtxIn.GetHash();
@@ -1213,8 +1621,16 @@ bool CWallet::AddToWallet(const CWalletTx& wtxIn, bool fFromLoadWallet, CWalletD
         wtxOrdered.insert(make_pair(wtx.nOrderPos, TxPair(&wtx, (CAccountingEntry*)0)));
         AddToSpends(hash);
         BOOST_FOREACH(const CTxIn& txin, wtx.vin) {
-            if (mapWallet.count(txin.prevout.hash)) {
-                CWalletTx& prevtx = mapWallet[txin.prevout.hash];
+            COutPoint prevout = txin.prevout;
+            if (txin.scriptSig.IsZeroCTSpend()) {
+                libzeroct::CoinSpend zcs(&Params().GetConsensus().ZeroCT_Params);
+                assert(TxInToCoinSpend(&Params().GetConsensus().ZeroCT_Params, txin, zcs));
+                if(!mapSerial.count(zcs.getCoinSerialNumber()))
+                    continue;
+                prevout = mapSerial.at(zcs.getCoinSerialNumber());
+            }
+            if (mapWallet.count(prevout.hash)) {
+                CWalletTx& prevtx = mapWallet[prevout.hash];
                 if (prevtx.nIndex == -1 && !prevtx.hashUnset()) {
                     MarkConflicted(prevtx.hashBlock, wtx.GetHash());
                 }
@@ -1309,8 +1725,89 @@ bool CWallet::AddToWallet(const CWalletTx& wtxIn, bool fFromLoadWallet, CWalletD
             }
         }
 
+        std::vector<std::pair<const CBigNum, COutPoint>> serialToWrite;
+        std::vector<std::pair<const CBigNum, PublicMintWitnessData>> witnessToWrite;
+
+        wtx.vAmounts.resize(wtx.vout.size());
+        wtx.vPaymentIds.resize(wtx.vout.size());
+
+        for(unsigned int i = 0; i < wtx.vout.size(); i++)
+        {
+            CTxOut out = wtx.vout[i];
+            if (IsMine(out) == ISMINE_SPENDABLE_PRIVATE)
+            {
+                if (!out.IsZeroCTMint())
+                    continue;
+
+                libzeroct::PublicCoin pubCoin(&Params().GetConsensus().ZeroCT_Params);
+
+                if (!TxOutToPublicCoin(&Params().GetConsensus().ZeroCT_Params, out, pubCoin, NULL))
+                    continue;
+
+                CKey zk; libzeroct::BlindingCommitment bc; libzeroct::ObfuscationValue oj;
+
+                if (!GetZeroKey(zk))
+                    break;
+
+                if (!GetBlindingCommitment(bc))
+                    break;
+
+                libzeroct::PrivateCoin privateCoin(&Params().GetConsensus().ZeroCT_Params, zk, pubCoin.getPubKey(), bc, pubCoin.getValue(),
+                                                     pubCoin.getPaymentId(), pubCoin.getAmount());
+
+                if (!privateCoin.isValid())
+                    continue;
+
+                if (!GetObfuscationJ(oj))
+                    break;
+
+                std::string pi = privateCoin.getPaymentId();
+                wtx.vPaymentIds[i] = pi;
+                CAmount amount = privateCoin.getAmount();
+                wtx.vAmounts[i] = amount;
+
+                COutPoint outWrite(wtx.GetHash(),i);
+
+                serialToWrite.push_back(std::make_pair(privateCoin.getPublicSerialNumber(oj), outWrite));
+
+                {
+                    LOCK(cs_witnesser);
+                    if (!mapWitness.count(pubCoin.getValue()))
+                    {
+
+                        if (!mapBlockIndex.count(wtx.hashBlock))
+                            continue;
+
+                        CBlockIndex* pindex = mapBlockIndex[wtx.hashBlock];
+
+                        if(!pindex->pprev)
+                            continue;
+
+                        Accumulator accumulator(&Params().GetConsensus().ZeroCT_Params.accumulatorParams);
+
+                        if (pindex->pprev->nAccumulatorValue != 0)
+                            accumulator.setValue(pindex->pprev->nAccumulatorValue);
+
+                        witnessToWrite.push_back(std::make_pair(pubCoin.getValue(),
+                                                                PublicMintWitnessData(&Params().GetConsensus().ZeroCT_Params,
+                                                                                      pubCoin, PublicMintChainData(outWrite, wtx.hashBlock),
+                                                                                      accumulator, pindex->pprev->GetBlockHash())));
+                    }
+                }
+            }
+        }
+
         //// debug print
         LogPrintf("AddToWallet %s  %s%s\n", wtxIn.GetHash().ToString(), (fInsertedNew ? "new" : ""), (fUpdated ? "update" : ""));
+
+        for(auto& it: serialToWrite)
+            WriteSerial(it.first, it.second);
+
+        {
+            LOCK(cs_witnesser);
+            for(auto& it: witnessToWrite)
+                WriteWitness(it.first, it.second);
+        }
 
         // Write to disk
         if (fInsertedNew || fUpdated)
@@ -1348,9 +1845,17 @@ bool CWallet::AddToWalletIfInvolvingMe(const CTransaction& tx, const CBlock* pbl
 
         if (pblock) {
             BOOST_FOREACH(const CTxIn& txin, tx.vin) {
-                std::pair<TxSpends::const_iterator, TxSpends::const_iterator> range = mapTxSpends.equal_range(txin.prevout);
+                COutPoint prevout = txin.prevout;
+                if (txin.scriptSig.IsZeroCTSpend()) {
+                    libzeroct::CoinSpend zcs(&Params().GetConsensus().ZeroCT_Params);
+                    assert(TxInToCoinSpend(&Params().GetConsensus().ZeroCT_Params, txin, zcs));
+                    if(!mapSerial.count(zcs.getCoinSerialNumber()))
+                        continue;
+                    prevout = mapSerial.at(zcs.getCoinSerialNumber());
+                }
+                std::pair<TxSpends::const_iterator, TxSpends::const_iterator> range = mapTxSpends.equal_range(prevout);
                 while (range.first != range.second) {
-                    if (range.first->second != tx.GetHash()) {
+                    if (range.first->second != tx.GetHash() && range.second->first == range.first->first) {
                         LogPrintf("Transaction %s (in block %s) conflicts with wallet transaction %s (both spend %s:%i)\n", tx.GetHash().ToString(), pblock->GetHash().ToString(), range.first->second.ToString(), range.first->first.hash.ToString(), range.first->first.n);
                         MarkConflicted(pblock->GetHash(), range.first->second);
                     }
@@ -1393,7 +1898,7 @@ bool CWallet::AbandonTransaction(const uint256& hashTx)
     assert(mapWallet.count(hashTx));
     CWalletTx& origtx = mapWallet[hashTx];
     if (origtx.GetDepthInMainChain() > 0 || origtx.InMempool()) {
-        LogPrintf("AbandonTransaction : Could not abandon transaction.%s%s",origtx.InMempool()?" Tx in Mempool":"",origtx.GetDepthInMainChain() > 0?" Tx already confirmed":"");
+        LogPrintf("AbandonTransaction : Could not abandon transaction.%s%s\n",origtx.InMempool()?" Tx in Mempool":"",origtx.GetDepthInMainChain() > 0?" Tx already confirmed":"");
         return false;
     }
 
@@ -1429,8 +1934,16 @@ bool CWallet::AbandonTransaction(const uint256& hashTx)
             // available of the outputs it spends. So force those to be recomputed
             BOOST_FOREACH(const CTxIn& txin, wtx.vin)
             {
-                if (mapWallet.count(txin.prevout.hash))
-                    mapWallet[txin.prevout.hash].MarkDirty();
+                COutPoint prevout = txin.prevout;
+                if (txin.scriptSig.IsZeroCTSpend()) {
+                    libzeroct::CoinSpend zcs(&Params().GetConsensus().ZeroCT_Params);
+                    assert(TxInToCoinSpend(&Params().GetConsensus().ZeroCT_Params, txin, zcs));
+                    if(!mapSerial.count(zcs.getCoinSerialNumber()))
+                        continue;
+                    prevout = mapSerial.at(zcs.getCoinSerialNumber());
+                }
+                if (mapWallet.count(prevout.hash))
+                    mapWallet[prevout.hash].MarkDirty();
             }
         }
     }
@@ -1490,8 +2003,16 @@ void CWallet::MarkConflicted(const uint256& hashBlock, const uint256& hashTx)
             // available of the outputs it spends. So force those to be recomputed
             BOOST_FOREACH(const CTxIn& txin, wtx.vin)
             {
-                if (mapWallet.count(txin.prevout.hash))
-                    mapWallet[txin.prevout.hash].MarkDirty();
+                COutPoint prevout = txin.prevout;
+                if (txin.scriptSig.IsZeroCTSpend()) {
+                    libzeroct::CoinSpend zcs(&Params().GetConsensus().ZeroCT_Params);
+                    assert(TxInToCoinSpend(&Params().GetConsensus().ZeroCT_Params, txin, zcs));
+                    if(!mapSerial.count(zcs.getCoinSerialNumber()))
+                        continue;
+                    prevout = mapSerial.at(zcs.getCoinSerialNumber());
+                }
+                if (mapWallet.count(prevout.hash))
+                    mapWallet[prevout.hash].MarkDirty();
             }
         }
     }
@@ -1526,8 +2047,17 @@ void CWallet::SyncTransaction(const CTransaction& tx, const CBlockIndex *pindex,
 
                 BOOST_FOREACH(const CTxIn& txin, tx.vin)
                 {
-                    if (mapWallet.count(txin.prevout.hash))
-                        mapWallet[txin.prevout.hash].MarkDirty();
+                    COutPoint prevout = txin.prevout;
+                    if (txin.scriptSig.IsZeroCTSpend()) {
+                        libzeroct::CoinSpend zcs(&Params().GetConsensus().ZeroCT_Params);
+                        assert(TxInToCoinSpend(&Params().GetConsensus().ZeroCT_Params, txin, zcs));
+                        if(!mapSerial.count(zcs.getCoinSerialNumber()))
+                            continue;
+                        prevout = mapSerial.at(zcs.getCoinSerialNumber());
+                    }
+
+                    if (mapWallet.count(prevout.hash))
+                        mapWallet[prevout.hash].MarkDirty();
                 }
             }
         }
@@ -1546,18 +2076,51 @@ void CWallet::SyncTransaction(const CTransaction& tx, const CBlockIndex *pindex,
     {
         BOOST_FOREACH(const CTxIn& txin, tx.vin)
         {
-            if (mapWallet.count(txin.prevout.hash))
+            COutPoint prevout = txin.prevout;
+            if (txin.scriptSig.IsZeroCTSpend()) {
+                libzeroct::CoinSpend zcs(&Params().GetConsensus().ZeroCT_Params);
+                assert(TxInToCoinSpend(&Params().GetConsensus().ZeroCT_Params, txin, zcs));
+                if(!mapSerial.count(zcs.getCoinSerialNumber()))
+                    continue;
+                prevout = mapSerial.at(zcs.getCoinSerialNumber());
+            }
+            if (mapWallet.count(prevout.hash))
                 mapWallet[txin.prevout.hash].MarkDirty();
         }
     }
 
-    if (!fConnect && tx.IsCoinStake() && IsFromMe(tx))
+    if (!fConnect)
     {
-        AbandonTransaction(tx.hash);
-        LogPrintf("SyncTransaction : Removing tx %s from mapTxSpends\n",tx.hash.ToString());
+        if (tx.IsCoinStake() && IsFromMe(tx))
+            AbandonTransaction(tx.hash);
         BOOST_FOREACH(const CTxIn& txin, tx.vin)
         {
-            mapTxSpends.erase(txin.prevout);
+            COutPoint prevout = txin.prevout;
+            if (txin.scriptSig.IsZeroCTSpend()) {
+                libzeroct::CoinSpend zcs(&Params().GetConsensus().ZeroCT_Params);
+                assert(TxInToCoinSpend(&Params().GetConsensus().ZeroCT_Params, txin, zcs));
+                if(!mapSerial.count(zcs.getCoinSerialNumber()))
+                    continue;
+                prevout = mapSerial.at(zcs.getCoinSerialNumber());
+                mapSerial.erase(zcs.getCoinSerialNumber());
+            }
+            if (tx.IsCoinStake() && IsFromMe(tx))
+                mapTxSpends.erase(prevout);
+        }
+        BOOST_FOREACH(const CTxOut& txout, tx.vout)
+        {
+            if (txout.IsZeroCTMint()) {
+                libzeroct::PublicCoin pubCoin(&Params().GetConsensus().ZeroCT_Params);
+                assert(TxOutToPublicCoin(&Params().GetConsensus().ZeroCT_Params, txout, pubCoin));
+                {
+                    LOCK(cs_witnesser);
+                    if (mapWitness.count(pubCoin.getValue())) {
+                            PublicMintWitnessData witnessData = pwalletMain->mapWitness.at(pubCoin.getValue());
+                            if (witnessData.GetChainData().GetTxHash() == tx.GetHash())
+                                mapWitness.erase(pubCoin.getValue());
+                    }
+                }
+            }
         }
     }
 }
@@ -1582,14 +2145,27 @@ CAmount CWallet::GetDebit(const CTxIn &txin, const isminefilter& filter) const
 {
     {
         LOCK(cs_wallet);
-        map<uint256, CWalletTx>::const_iterator mi = mapWallet.find(txin.prevout.hash);
+        COutPoint prevout = txin.prevout;
+        if (txin.scriptSig.IsZeroCTSpend()) {
+            libzeroct::CoinSpend zcs(&Params().GetConsensus().ZeroCT_Params);
+            assert(TxInToCoinSpend(&Params().GetConsensus().ZeroCT_Params, txin, zcs));
+            if(!mapSerial.count(zcs.getCoinSerialNumber())) {LogPrintf("Not my input %s\n", txin.ToString());
+                return 0;}
+            prevout = mapSerial.at(zcs.getCoinSerialNumber());
+        }
+        map<uint256, CWalletTx>::const_iterator mi = mapWallet.find(prevout.hash);
         if (mi != mapWallet.end())
         {
             const CWalletTx& prev = (*mi).second;
-            if (txin.prevout.n < prev.vout.size())
-                if (IsMine(prev.vout[txin.prevout.n]) & filter)
-                    return prev.vout[txin.prevout.n].nValue;
+            if (prevout.n < prev.vout.size())
+                if (IsMine(prev.vout[prevout.n]) & filter) {
+                    if (prev.vout[prevout.n].scriptPubKey.IsZeroCTMint())
+                        return prev.vAmounts[prevout.n];
+                    else
+                        return prev.vout[prevout.n].nValue;
+                }
         }
+
     }
     return 0;
 }
@@ -1749,6 +2325,9 @@ int64_t CWalletTx::GetTxTime() const
 
 int CWalletTx::GetRequestCount() const
 {
+    if (!pwallet)
+        return 0;
+
     // Returns -1 if it wasn't being tracked
     int nRequests = -1;
     {
@@ -1800,7 +2379,7 @@ void CWalletTx::GetAmounts(list<COutputEntry>& listReceived,
     {
         CAmount nValueOut = GetValueOut();
         CAmount nValueOutCFund = GetValueOutCFund();
-        nFee = nDebit - nValueOut + nValueOutCFund;
+        nFee = HasZeroCTMint() ? GetFee() : nDebit - nValueOut + nValueOutCFund;
     }
 
     // Sent/received.
@@ -1831,13 +2410,15 @@ void CWalletTx::GetAmounts(list<COutputEntry>& listReceived,
 
         if (!ExtractDestination(txout.scriptPubKey, address))
         {
-            if(!txout.scriptPubKey.IsCommunityFundContribution())
+            if(!txout.scriptPubKey.IsCommunityFundContribution() && !txout.scriptPubKey.IsZeroCTMint())
                 LogPrintf("CWalletTx::GetAmounts: Unknown transaction type found, txid %s n: %d\n",
                          this->GetHash().ToString(),i);
             address = CNoDestination();
         }
 
-        COutputEntry output = {address, txout.nValue, (int)i};
+        CAmount amount = txout.IsZeroCTMint() ? vAmounts[i] : txout.nValue;
+
+        COutputEntry output = {address, amount, (int)i};
 
         // If we are debited by the transaction, add the output as a "sent" entry
         if (nDebit > 0)
@@ -1965,6 +2546,8 @@ void CWallet::ReacceptWalletTransactions()
 
 bool CWalletTx::RelayWalletTransaction()
 {
+    if (!pwallet)
+        return false;
     assert(pwallet->GetBroadcastTransactions());
     if (!(IsCoinBase() || IsCoinStake()))
     {
@@ -2028,6 +2611,28 @@ CAmount CWalletTx::GetDebit(const isminefilter& filter) const
             debit += nWatchDebitCached;
         }
     }
+    if (filter & ISMINE_STAKABLE)
+    {
+        if (fColdStakingDebitCached)
+            debit += nColdStakingDebitCached;
+        else
+        {
+            nColdStakingDebitCached = pwallet->GetDebit(*this, ISMINE_STAKABLE);
+            fColdStakingDebitCached = true;
+            debit += nColdStakingDebitCached;
+        }
+    }
+    if (filter & ISMINE_SPENDABLE_PRIVATE)
+    {
+        if (fPrivateDebitCached) {
+            debit += nPrivateDebitCached;
+        } else
+        {
+            nPrivateDebitCached = pwallet->GetDebit(*this, ISMINE_SPENDABLE_PRIVATE);
+            fPrivateDebitCached = true;
+            debit += nPrivateDebitCached;
+        }
+    }
     return debit;
 }
 
@@ -2073,6 +2678,35 @@ CAmount CWalletTx::GetCredit(const isminefilter& filter) const
         }
     }
 
+    if (filter & ISMINE_SPENDABLE_PRIVATE)
+    {
+        if (fPrivateCreditCached)
+            credit += nPrivateCreditCached;
+        else
+        {
+            CAmount nCredit = 0;
+            unsigned int i = -1;
+            BOOST_FOREACH(const CTxOut& txout, this->vout)
+            {
+                i++;
+                if (!txout.IsZeroCTMint())
+                    continue;
+
+                CAmount amount = vAmounts[i];
+
+                if (!MoneyRange(amount))
+                    throw std::runtime_error("CWallet::GetAvailableCredit(): value out of range");
+
+                nCredit += ((pwallet->IsMine(txout) & filter) ? amount : 0);
+
+                if (!MoneyRange(nCredit))
+                    throw std::runtime_error("CWallet::GetCredit(): value out of range");
+            }
+            nPrivateCreditCached = nCredit;
+            fPrivateCreditCached = true;
+            credit += nPrivateCreditCached;
+        }
+    }
     return credit;
 }
 
@@ -2108,8 +2742,8 @@ CAmount CWalletTx::GetAvailableCredit(bool fUseCache) const
     {
         if (!pwallet->IsSpent(hashTx, i))
         {
-            const CTxOut &txout = vout[i];
-            nCredit += pwallet->GetCredit(txout, ISMINE_SPENDABLE);
+            CTxOut out = vout[i];
+            nCredit += pwallet->GetCredit(out, ISMINE_SPENDABLE);
             if (!MoneyRange(nCredit))
                 throw std::runtime_error("CWalletTx::GetAvailableCredit() : value out of range");
         }
@@ -2137,6 +2771,106 @@ CAmount CWalletTx::GetAvailableStakableCredit() const
         {
             const CTxOut &txout = vout[i];
             nCredit += pwallet->GetCredit(txout, ISMINE_STAKABLE);
+            if (!MoneyRange(nCredit))
+                throw std::runtime_error("CWalletTx::GetAvailableCredit() : value out of range");
+        }
+    }
+
+    return nCredit;
+}
+
+CAmount CWalletTx::GetAvailablePrivateCredit() const
+{
+    if (pwallet == 0 || !IsInMainChain())
+        return 0;
+
+    CAmount nCredit = 0;
+    uint256 hashTx = GetHash();
+    for (unsigned int i = 0; i < vout.size(); i++)
+    {
+        if (!vout[i].IsZeroCTMint())
+            continue;
+
+        CAmount amount = vAmounts[i];
+
+        if (!pwallet->IsSpent(hashTx, i))
+        {
+            const CTxOut &txout = vout[i];
+            libzeroct::PublicCoin pubCoin(&Params().GetConsensus().ZeroCT_Params);
+
+            if (!TxOutToPublicCoin(&Params().GetConsensus().ZeroCT_Params, txout, pubCoin, NULL))
+                continue;
+
+            bool fFoundWitness = false;
+
+            {
+                LOCK(pwalletMain->cs_witnesser);
+                if (pwalletMain->mapWitness.count(pubCoin.getValue())) {
+
+                    PublicMintWitnessData witnessData = pwalletMain->mapWitness.at(pubCoin.getValue());
+
+                    if (witnessData.GetCount() > (GetArg("-defaultsecuritylevel", DEFAULT_SPEND_MIN_MINT_COUNT)-1))
+                        fFoundWitness = true;
+
+                }
+            }
+
+            if (!fFoundWitness && GetArg("-enablewitnesser",true))
+                continue;            
+
+            nCredit += (pwallet->IsMine(txout) & ISMINE_SPENDABLE_PRIVATE) ? amount : 0;
+            if (!MoneyRange(nCredit))
+                throw std::runtime_error("CWalletTx::GetAvailableCredit() : value out of range");
+        }
+    }
+
+    return nCredit;
+}
+
+CAmount CWalletTx::GetImmaturePrivateCredit(const bool& fUseCache) const
+{
+    if (pwallet == 0 || !IsInMainChain())
+        return 0;
+
+    CAmount nCredit = 0;
+    uint256 hashTx = GetHash();
+    for (unsigned int i = 0; i < vout.size(); i++)
+    {
+        if (!vout[i].IsZeroCTMint())
+            continue;
+
+        if (!pwallet->IsSpent(hashTx, i))
+        {
+            const CTxOut &txout = vout[i];
+            libzeroct::PublicCoin pubCoin(&Params().GetConsensus().ZeroCT_Params);
+
+            if (!TxOutToPublicCoin(&Params().GetConsensus().ZeroCT_Params, txout, pubCoin, NULL))
+                continue;
+
+            bool fFoundWitness = false;
+
+            {
+                LOCK(pwalletMain->cs_witnesser);
+                if (pwalletMain->mapWitness.count(pubCoin.getValue())) {
+
+                    PublicMintWitnessData witnessData = pwalletMain->mapWitness.at(pubCoin.getValue());
+
+                    if (witnessData.GetCount() > (GetArg("-defaultsecuritylevel", DEFAULT_SPEND_MIN_MINT_COUNT)-1))
+                        fFoundWitness = true;
+
+                }
+            }
+
+            if (fFoundWitness && GetArg("-enablewitnesser",true))
+                continue;
+
+            CAmount amount = vAmounts[i];
+
+            if (!MoneyRange(amount))
+                throw std::runtime_error("CWallet::GetAvailableCredit(): value out of range");
+
+            nCredit += ((pwallet->IsMine(txout) & ISMINE_SPENDABLE_PRIVATE) ? amount : 0);
+
             if (!MoneyRange(nCredit))
                 throw std::runtime_error("CWalletTx::GetAvailableCredit() : value out of range");
         }
@@ -2226,14 +2960,23 @@ bool CWalletTx::IsTrusted() const
     // Trusted if all inputs are from us and are in the mempool:
     BOOST_FOREACH(const CTxIn& txin, vin)
     {
+        COutPoint prevout = txin.prevout;
+        if (txin.scriptSig.IsZeroCTSpend()) {
+            libzeroct::CoinSpend zcs(&Params().GetConsensus().ZeroCT_Params);
+            assert(TxInToCoinSpend(&Params().GetConsensus().ZeroCT_Params, txin, zcs));
+            if(!pwallet->mapSerial.count(zcs.getCoinSerialNumber()))
+                continue;
+            prevout = pwallet->mapSerial.at(zcs.getCoinSerialNumber());
+        }
         // Transactions not sent by us: not trusted
-        const CWalletTx* parent = pwallet->GetWalletTx(txin.prevout.hash);
+        const CWalletTx* parent = pwallet->GetWalletTx(prevout.hash);
         if (parent == NULL)
             return false;
-        const CTxOut& parentOut = parent->vout[txin.prevout.n];
-        if (pwallet->IsMine(parentOut) != ISMINE_SPENDABLE)
+        const CTxOut& parentOut = parent->vout[prevout.n];
+        if (pwallet->IsMine(parentOut) != ISMINE_SPENDABLE && pwallet->IsMine(parentOut) != ISMINE_SPENDABLE_PRIVATE)
             return false;
     }
+
     return true;
 }
 
@@ -2336,6 +3079,23 @@ CAmount CWallet::GetColdStakingBalance() const
     return nTotal;
 }
 
+
+CAmount CWallet::GetPrivateBalance() const
+{
+    CAmount nTotal = 0;
+    {
+        LOCK2(cs_main, cs_wallet);
+        for (map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); ++it)
+        {
+            const CWalletTx* pcoin = &(*it).second;
+            if (pcoin->IsTrusted())
+                nTotal += pcoin->GetAvailablePrivateCredit();
+        }
+    }
+
+    return nTotal;
+}
+
 CAmount CWallet::GetUnconfirmedBalance() const
 {
     CAmount nTotal = 0;
@@ -2344,8 +3104,10 @@ CAmount CWallet::GetUnconfirmedBalance() const
         for (map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); ++it)
         {
             const CWalletTx* pcoin = &(*it).second;
-            if (!pcoin->IsTrusted() && pcoin->GetDepthInMainChain() == 0 && pcoin->InMempool())
+            if (!pcoin->IsTrusted() && pcoin->GetDepthInMainChain() == 0 && pcoin->InMempool()) {
                 nTotal += pcoin->GetAvailableCredit();
+                nTotal += pcoin->GetAvailablePrivateCredit();
+            }
         }
     }
     return nTotal;
@@ -2360,6 +3122,7 @@ CAmount CWallet::GetImmatureBalance() const
         {
             const CWalletTx* pcoin = &(*it).second;
             nTotal += pcoin->GetImmatureCredit();
+            nTotal += pcoin->GetImmaturePrivateCredit();
         }
     }
     return nTotal;
@@ -2447,7 +3210,94 @@ void CWallet::AvailableCoins(vector<COutput>& vCoins, bool fOnlyConfirmed, const
                         vCoins.push_back(COutput(pcoin, i, nDepth,
                                                  ((mine & ISMINE_SPENDABLE) != ISMINE_NO) ||
                                                   (coinControl && coinControl->fAllowWatchOnly && (mine & ISMINE_WATCH_SOLVABLE) != ISMINE_NO),
-                                                 (mine & (ISMINE_SPENDABLE | ISMINE_WATCH_SOLVABLE | (fIncludeColdStaking ? ISMINE_STAKABLE : ISMINE_NO))) != ISMINE_NO));
+                                                 (mine & (ISMINE_SPENDABLE | ISMINE_WATCH_SOLVABLE | (fIncludeColdStaking ? ISMINE_STAKABLE : ISMINE_NO))) != ISMINE_NO,
+                                                 "", pcoin->vout[i].nValue));
+            }
+        }
+    }
+}
+
+void CWallet::AvailablePrivateCoins(vector<COutput>& vCoins, bool fOnlyConfirmed, const CCoinControl *coinControl, bool fIncludeZeroValue) const
+{
+    vCoins.clear();
+
+    {
+        LOCK2(cs_main, cs_wallet);        
+        for (map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); ++it)
+        {
+            const uint256& wtxid = it->first;
+            const CWalletTx* pcoin = &(*it).second;
+
+            if (!CheckFinalTx(*pcoin))
+                continue;
+
+            if (fOnlyConfirmed && !pcoin->IsTrusted())
+                continue;
+
+            if ((pcoin->IsCoinBase() || pcoin->IsCoinStake()) && pcoin->GetBlocksToMaturity() > 0)
+                continue;
+
+            int nDepth = pcoin->GetDepthInMainChain();
+            if (nDepth < 0)
+                continue;
+
+            if (!pcoin->HasZeroCTMint())
+                continue;           
+
+            // We should not consider coins which aren't at least in our mempool
+            // It's possible for these to be conflicted via ancestors which we may never be able to detect
+            if (nDepth == 0 && !pcoin->InMempool())
+                continue;
+
+            if (!mapBlockIndex.count(pcoin->hashBlock))
+                continue;
+
+            CBlockIndex* pindex = mapBlockIndex[pcoin->hashBlock];
+            if (!pindex)
+                continue;
+
+            for (unsigned int i = 0; i < pcoin->vout.size(); i++) {
+                isminetype mine = IsMine(pcoin->vout[i]);
+                if (!pcoin->vout[i].IsZeroCTMint())
+                    continue;
+
+                std::string paymentId = pcoin->vPaymentIds[i];
+                CAmount amount = pcoin->vAmounts[i];
+
+                std::vector<unsigned char> c; CPubKey p; std::vector<unsigned char> id;  std::vector<unsigned char> a;
+                std::vector<unsigned char> ac;
+                if(!pcoin->vout[i].scriptPubKey.ExtractZeroCTMintData(p, c, id, a, ac))
+                    continue;
+                libzeroct::PublicCoin pubCoin(&Params().GetConsensus().ZeroCT_Params);
+
+                if (!TxOutToPublicCoin(&Params().GetConsensus().ZeroCT_Params, pcoin->vout[i], pubCoin, NULL))
+                    continue;
+
+                bool fFoundWitness = false;
+
+                {
+                    LOCK(cs_witnesser);
+                    if (mapWitness.count(pubCoin.getValue()))
+                    {
+
+                        PublicMintWitnessData witnessData = mapWitness.at(pubCoin.getValue());
+
+                        if (witnessData.GetCount() > (GetArg("-defaultsecuritylevel", DEFAULT_SPEND_MIN_MINT_COUNT)-1))
+                            fFoundWitness = true;
+
+                    }
+                }
+
+                if (!fFoundWitness && !coinControl && GetArg("-enablewitnesser",true))
+                    continue;
+
+                if (!(IsSpent(wtxid, i)) && mine != ISMINE_NO &&
+                    !IsLockedCoin((*it).first, i) && (amount > 0 || fIncludeZeroValue) &&
+                    (!coinControl || !coinControl->HasSelected() || coinControl->fAllowOtherInputs || coinControl->IsSelected(COutPoint((*it).first, i))))
+                        vCoins.push_back(COutput(pcoin, i, nDepth,
+                                                 ((mine & ISMINE_SPENDABLE_PRIVATE) != ISMINE_NO),
+                                                 ((mine & ISMINE_SPENDABLE_PRIVATE) != ISMINE_NO),
+                                                 paymentId, amount));
             }
         }
     }
@@ -2525,7 +3375,7 @@ bool CWallet::SelectCoinsMinConf(const CAmount& nTargetValue, int nConfMine, int
             continue;
 
         int i = output.i;
-        CAmount n = pcoin->vout[i].nValue;
+        CAmount n = pcoin->vout[i].IsZeroCTMint() ? output.nAmount : pcoin->vout[i].nValue;
 
         pair<CAmount,pair<const CWalletTx*,unsigned int> > coin = make_pair(n,make_pair(pcoin, i));
 
@@ -2612,7 +3462,7 @@ bool CWallet::SelectCoins(const vector<COutput>& vAvailableCoins, const CAmount&
         {
             if (!out.fSpendable)
                  continue;
-            nValueRet += out.tx->vout[out.i].nValue;
+            nValueRet += out.tx->vout[out.i].IsZeroCTMint() ? out.nAmount : out.tx->vout[out.i].nValue;
             setCoinsRet.insert(make_pair(out.tx, out.i));
         }
         return (nValueRet >= nTargetValue);
@@ -2663,14 +3513,14 @@ bool CWallet::SelectCoins(const vector<COutput>& vAvailableCoins, const CAmount&
     return res;
 }
 
-bool CWallet::FundTransaction(CMutableTransaction& tx, CAmount& nFeeRet, bool overrideEstimatedFeeRate, const CFeeRate& specificFeeRate, int& nChangePosInOut, std::string& strFailReason, bool includeWatching, bool lockUnspents, const CTxDestination& destChange)
+bool CWallet::FundTransaction(CMutableTransaction& tx, CAmount& nFeeRet, bool overrideEstimatedFeeRate, const CFeeRate& specificFeeRate, int& nChangePosInOut, std::string& strFailReason, bool includeWatching, bool lockUnspents, const CTxDestination& destChange, bool fPrivate)
 {
     vector<CRecipient> vecSend;
 
     // Turn the txout set into a CRecipient vector
     BOOST_FOREACH(const CTxOut& txOut, tx.vout)
     {
-        CRecipient recipient = {txOut.scriptPubKey, txOut.nValue, false, ""};
+        CRecipient recipient = {txOut.scriptPubKey, txOut.nValue, false, "", 0};
         vecSend.push_back(recipient);
     }
 
@@ -2686,7 +3536,7 @@ bool CWallet::FundTransaction(CMutableTransaction& tx, CAmount& nFeeRet, bool ov
 
     CReserveKey reservekey(this);
     CWalletTx wtx;
-    if (!CreateTransaction(vecSend, wtx, reservekey, nFeeRet, nChangePosInOut, strFailReason, &coinControl, false))
+    if (!CreateTransaction(vecSend, wtx, reservekey, nFeeRet, nChangePosInOut, strFailReason, fPrivate, &coinControl, false))
         return false;
 
     if (nChangePosInOut != -1)
@@ -2711,12 +3561,13 @@ bool CWallet::FundTransaction(CMutableTransaction& tx, CAmount& nFeeRet, bool ov
 }
 
 bool CWallet::CreateTransaction(const vector<CRecipient>& vecSend, CWalletTx& wtxNew, CReserveKey& reservekey, CAmount& nFeeRet,
-                                int& nChangePosInOut, std::string& strFailReason, const CCoinControl* coinControl, bool sign, std::string strDZeel)
+                                int& nChangePosInOut, std::string& strFailReason, bool fPrivate, const CCoinControl* coinControl, bool sign, std::string strDZeel)
 {
-    Navtech navtech;
     CAmount nValue = 0;
     int nChangePosRequest = nChangePosInOut;
     unsigned int nSubtractFeeFromAmount = 0;
+    bool fZeroCT = false;
+
     BOOST_FOREACH (const CRecipient& recipient, vecSend)
     {
         if (nValue < 0 || recipient.nAmount < 0)
@@ -2728,7 +3579,11 @@ bool CWallet::CreateTransaction(const vector<CRecipient>& vecSend, CWalletTx& wt
 
         if (recipient.fSubtractFeeFromAmount)
             nSubtractFeeFromAmount++;
+
+        if (recipient.scriptPubKey.IsZeroCTMint())
+            fZeroCT = true;
     }
+
     if (vecSend.empty() || nValue < 0)
     {
         strFailReason = _("Transaction amounts must be positive");
@@ -2745,12 +3600,13 @@ bool CWallet::CreateTransaction(const vector<CRecipient>& vecSend, CWalletTx& wt
 
     if(wtxNew.nCustomVersion > 0) txNew.nVersion = wtxNew.nCustomVersion;
 
+    if (fZeroCT || fPrivate) {
+        txNew.nVersion |= ZEROCT_TX_VERSION_FLAG;
+    }
+
     txNew.strDZeel = (wtxNew.strDZeel != "" ? wtxNew.strDZeel : strDZeel).length() > 0 ?
                 (wtxNew.strDZeel != "" ? wtxNew.strDZeel : strDZeel) :
-                navtech.EncryptAddress(std::to_string(GetAdjustedTime() + (rand() % 1<<8)),sPubKey);
-
-    if (strDZeel.length() > 0)
-      wtxNew.fAnon = true;
+                "";
 
     if (strDZeel.length() > 512)
       txNew.strDZeel.resize(512);
@@ -2792,10 +3648,13 @@ bool CWallet::CreateTransaction(const vector<CRecipient>& vecSend, CWalletTx& wt
         LOCK2(cs_main, cs_wallet);
         {
             std::vector<COutput> vAvailableCoins;
-            AvailableCoins(vAvailableCoins, true, coinControl);
-
+            if(fPrivate)
+                AvailablePrivateCoins(vAvailableCoins, true, coinControl);
+            else
+                AvailableCoins(vAvailableCoins, true, coinControl);
             nFeeRet = 0;
             // Start with no fee and loop until there is enough fee
+            // Unless it's a private transaction and the fee is fixed so we can already add it for efficiency
             while (true)
             {
                 nChangePosInOut = nChangePosRequest;
@@ -2804,6 +3663,9 @@ bool CWallet::CreateTransaction(const vector<CRecipient>& vecSend, CWalletTx& wt
                 wtxNew.fFromMe = true;
                 bool fFirst = true;
 
+                CBN_vector values;
+                CBN_vector gammas;
+
                 CAmount nValueToSelect = nValue;
                 if (nSubtractFeeFromAmount == 0)
                     nValueToSelect += nFeeRet;
@@ -2811,35 +3673,45 @@ bool CWallet::CreateTransaction(const vector<CRecipient>& vecSend, CWalletTx& wt
                 // vouts to the payees
                 BOOST_FOREACH (const CRecipient& recipient, vecSend)
                 {
-                    CTxOut txout(recipient.nAmount, recipient.scriptPubKey);
+                    CTxOut txout(recipient.scriptPubKey.IsZeroCTMint() ? 0 : recipient.nAmount, recipient.scriptPubKey);
 
                     if(recipient.scriptPubKey.IsCommunityFundContribution())
                         wtxNew.fCFund = true;
 
-                    if (recipient.fSubtractFeeFromAmount)
+                    if (!(fPrivate || fZeroCT))
                     {
-                        txout.nValue -= nFeeRet / nSubtractFeeFromAmount; // Subtract fee equally from each selected recipient
-
-                        if (fFirst) // first receiver pays the remainder not divisible by output count
+                        if (recipient.fSubtractFeeFromAmount)
                         {
-                            fFirst = false;
-                            txout.nValue -= nFeeRet % nSubtractFeeFromAmount;
+                            txout.nValue -= nFeeRet / nSubtractFeeFromAmount; // Subtract fee equally from each selected recipient
+
+                            if (fFirst) // first receiver pays the remainder not divisible by output count
+                            {
+                                fFirst = false;
+                                txout.nValue -= nFeeRet % nSubtractFeeFromAmount;
+                            }
                         }
-                    }
 
-                    if (txout.IsDust(::minRelayTxFee))
-                    {
-                        if (recipient.fSubtractFeeFromAmount && nFeeRet > 0)
+                        if (txout.IsDust(::minRelayTxFee))
                         {
-                            if (txout.nValue < 0)
-                                strFailReason = _("The transaction amount is too small to pay the fee");
+                            if (recipient.fSubtractFeeFromAmount && nFeeRet > 0)
+                            {
+                                if (txout.nValue < 0)
+                                    strFailReason = _("The transaction amount is too small to pay the fee");
+                                else
+                                    strFailReason = _("The transaction amount is too small to send after the fee has been deducted");
+                            }
                             else
-                                strFailReason = _("The transaction amount is too small to send after the fee has been deducted");
+                                strFailReason = _("Transaction amount too small");
+                            return false;
                         }
-                        else
-                            strFailReason = _("Transaction amount too small");
-                        return false;
                     }
+
+                    if (recipient.scriptPubKey.IsZeroCTMint())
+                    {
+                        values.push_back(CBigNum(recipient.nAmount));
+                        gammas.push_back(CBigNum(recipient.gamma));
+                    }
+
                     txNew.vout.push_back(txout);
                 }
 
@@ -2875,81 +3747,112 @@ bool CWallet::CreateTransaction(const vector<CRecipient>& vecSend, CWalletTx& wt
                     // change transaction isn't always pay-to-navcoin-address
                     CScript scriptChange;
 
-                    // coin control: send change to custom address
-                    if (coinControl && !boost::get<CNoDestination>(&coinControl->destChange))
-                        scriptChange = GetScriptForDestination(coinControl->destChange);
-
-                    // no coin control: send change to newly generated address
-                    else
+                    if(fPrivate)
                     {
-                        // Note: We use a new key here to keep it from being obvious which side is the change.
-                        //  The drawback is that by not reusing a previous key, the change may be lost if a
-                        //  backup is restored, if the backup doesn't have the new private key for the change.
-                        //  If we reused the old key, it would be possible to add code to look for and
-                        //  rediscover unknown transactions that were written with keys of ours to recover
-                        //  post-backup change.
+                        CKey zk; libzeroct::BlindingCommitment bc;
+                        pwalletMain->GetBlindingCommitment(bc);
+                        pwalletMain->GetZeroKey(zk);
 
-                        // Reserve a new key pair from key pool
-                        CPubKey vchPubKey;
-                        bool ret;
-                        ret = reservekey.GetReservedKey(vchPubKey);
-                        assert(ret); // should never fail, as we just unlocked
+                        libzeroct::CPrivateAddress pa(&Params().GetConsensus().ZeroCT_Params,bc,zk);
 
-                        scriptChange = GetScriptForDestination(vchPubKey.GetID());
-                    }
+                        std::vector<CRecipient> vecChange;
 
-                    CTxOut newTxOut(nChange, scriptChange);
+                        pa.SetPaymentId("Transaction Change");
+                        pa.SetAmount(nChange);
 
-                    // We do not move dust-change to fees, because the sender would end up paying more than requested.
-                    // This would be against the purpose of the all-inclusive feature.
-                    // So instead we raise the change and deduct from the recipient.
-                    if (nSubtractFeeFromAmount > 0 && newTxOut.IsDust(::minRelayTxFee))
-                    {
-                        CAmount nDust = newTxOut.GetDustThreshold(::minRelayTxFee) - newTxOut.nValue;
-                        newTxOut.nValue += nDust; // raise change until no more dust
-                        for (unsigned int i = 0; i < vecSend.size(); i++) // subtract from first recipient
-                        {
-                            if (vecSend[i].fSubtractFeeFromAmount)
-                            {
-                                txNew.vout[i].nValue -= nDust;
-                                if (txNew.vout[i].IsDust(::minRelayTxFee))
-                                {
-                                    strFailReason = _("The transaction amount is too small to send after the fee has been deducted");
-                                    return false;
-                                }
-                                break;
-                            }
-                        }
-                    }
-
-                    // Never create dust outputs; if we would, just
-                    // add the dust to the fee.
-                    if (newTxOut.IsDust(::minRelayTxFee))
-                    {
-                        nChangePosInOut = -1;
-                        nFeeRet += nChange;
-                        reservekey.ReturnKey();
-                    }
-                    else
-                    {
-                        if (nChangePosInOut == -1)
-                        {
-                            // Insert change txn at random position:
-                            nChangePosInOut = GetRandInt(txNew.vout.size()+1);
-                        }
-                        else if ((unsigned int)nChangePosInOut > txNew.vout.size())
-                        {
-                            strFailReason = _("Change index out of range");
+                        if (!DestinationToVecRecipients(nChange, pa, vecChange, false, false, true)) {
                             return false;
                         }
 
-                        vector<CTxOut>::iterator position = txNew.vout.begin()+nChangePosInOut;
-                        txNew.vout.insert(position, newTxOut);
+                        CTxOut newTxOut(0, vecChange[0].scriptPubKey);
+                        txNew.vout.push_back(newTxOut);
+
+                        values.push_back(vecChange[0].nAmount);
+                        gammas.push_back(vecChange[0].gamma);
+
+                        fZeroCT = true;
                     }
+                    else
+                    {
+                        // coin control: send change to custom address
+                        if (coinControl && !boost::get<CNoDestination>(&coinControl->destChange))
+                            scriptChange = GetScriptForDestination(coinControl->destChange);
+
+                        // no coin control: send change to newly generated address
+                        else
+                        {
+                            // Note: We use a new key here to keep it from being obvious which side is the change.
+                            //  The drawback is that by not reusing a previous key, the change may be lost if a
+                            //  backup is restored, if the backup doesn't have the new private key for the change.
+                            //  If we reused the old key, it would be possible to add code to look for and
+                            //  rediscover unknown transactions that were written with keys of ours to recover
+                            //  post-backup change.
+
+                            // Reserve a new key pair from key pool
+                            CPubKey vchPubKey;
+                            bool ret;
+                            ret = reservekey.GetReservedKey(vchPubKey);
+                            assert(ret); // should never fail, as we just unlocked
+
+                            scriptChange = GetScriptForDestination(vchPubKey.GetID());
+                        }
+
+                        CTxOut newTxOut(nChange, scriptChange);
+
+                        // We do not move dust-change to fees, because the sender would end up paying more than requested.
+                        // This would be against the purpose of the all-inclusive feature.
+                        // So instead we raise the change and deduct from the recipient.
+                        if (nSubtractFeeFromAmount > 0 && newTxOut.IsDust(::minRelayTxFee))
+                        {
+                            CAmount nDust = newTxOut.GetDustThreshold(::minRelayTxFee) - newTxOut.nValue;
+                            newTxOut.nValue += nDust; // raise change until no more dust
+                            for (unsigned int i = 0; i < vecSend.size(); i++) // subtract from first recipient
+                            {
+                                if (vecSend[i].fSubtractFeeFromAmount)
+                                {
+                                    txNew.vout[i].nValue -= nDust;
+                                    if (txNew.vout[i].IsDust(::minRelayTxFee))
+                                    {
+                                        strFailReason = _("The transaction amount is too small to send after the fee has been deducted");
+                                        return false;
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Never create dust outputs; if we would, just
+                        // add the dust to the fee.
+                        if (newTxOut.IsDust(::minRelayTxFee))
+                        {
+                            nChangePosInOut = -1;
+                            nFeeRet += nChange;
+                            reservekey.ReturnKey();
+                        }
+                        else
+                        {
+                            if (nChangePosInOut == -1)
+                            {
+                                // Insert change txn at random position:
+                                nChangePosInOut = GetRandInt(txNew.vout.size()+1);
+                            }
+                            else if ((unsigned int)nChangePosInOut > txNew.vout.size())
+                            {
+                                strFailReason = _("Change index out of range");
+                                return false;
+                            }
+
+                            vector<CTxOut>::iterator position = txNew.vout.begin()+nChangePosInOut;
+                            txNew.vout.insert(position, newTxOut);
+                        }
+                    }
+
                 }
                 else
                     reservekey.ReturnKey();
 
+                txNew.vout.push_back(CTxOut(nFeeRet, CScript(OP_FEE)));
+                
                 // Fill vin
                 //
                 // Note how the sequence number is set to max()-1 so that the
@@ -2958,33 +3861,99 @@ bool CWallet::CreateTransaction(const vector<CRecipient>& vecSend, CWalletTx& wt
                 {
                     if(coin.first->nTime > txNew.nTime)
                         txNew.nTime = coin.first->nTime;
-                    txNew.vin.push_back(CTxIn(coin.first->GetHash(),coin.second,CScript(),
+                    txNew.vin.push_back(CTxIn(fPrivate?uint256():coin.first->GetHash(),fPrivate?0:coin.second,CScript(),
                                               std::numeric_limits<unsigned int>::max()-1));
+                }
+
+                if (fZeroCT)
+                {
+                    uiInterface.ShowProgress(_("Constructing range proof..."), 0);
+
+                    BulletproofsRangeproof bprp(&Params().GetConsensus().ZeroCT_Params.coinCommitmentGroup);
+                    CBN_matrix mValueCommitments;
+
+                    assert(values.size() == gammas.size());
+
+                    bprp.Prove(values, gammas);
+
+                    std::vector<BulletproofsRangeproof> proofs;
+                    proofs.push_back(bprp);
+                    uiInterface.ShowProgress(_("Constructing range proof..."), 50);
+
+                    CBN_vector valueCommitments = bprp.GetValueCommitments();
+                    mValueCommitments.push_back(valueCommitments);
+
+                    if (!VerifyBulletproof(&Params().GetConsensus().ZeroCT_Params.coinCommitmentGroup, proofs, mValueCommitments))
+                    {
+                        uiInterface.ShowProgress(_("Constructing range proof..."), 100);
+                        strFailReason = _("Range proof failed");
+                        return false;
+                    }
+
+                    CDataStream serializedRangeProof(SER_NETWORK, PROTOCOL_VERSION);
+                    serializedRangeProof << bprp;
+
+                    txNew.vchRangeProof.clear();
+                    txNew.vchRangeProof.insert(txNew.vchRangeProof.end(), serializedRangeProof.begin(), serializedRangeProof.end());
+
+                    uiInterface.ShowProgress(_("Constructing range proof..."), 100);
                 }
 
                 // Sign
                 int nIn = 0;
                 CTransaction txNewConst(txNew);
+                if (fPrivate)
+                    uiInterface.ShowProgress(_("Selecting coins..."), 0);
+                unsigned int i = 0;
+
+                CBigNum r_sum = 0;
+                CBigNum gamma_sum = 0;
+
                 BOOST_FOREACH(const PAIRTYPE(const CWalletTx*,unsigned int)& coin, setCoins)
                 {
-                    bool signSuccess;
+                    bool signSuccess = false;
                     const CScript& scriptPubKey = coin.first->vout[coin.second].scriptPubKey;
                     SignatureData sigdata;
-                    if (sign)
-                        signSuccess = ProduceSignature(TransactionSignatureCreator(this, &txNewConst, nIn, coin.first->vout[coin.second].nValue, SIGHASH_ALL), scriptPubKey, sigdata);
+
+
+                    if (fPrivate) {
+                        unsigned int nProgress = (i++)*100/setCoins.size();
+
+                        if (nProgress > 0)
+                            uiInterface.ShowProgress(_("Selecting coins..."), nProgress);
+                    }
+
+                    if (sign) {
+
+                        if (!fPrivate)
+                            signSuccess = ProduceSignature(TransactionSignatureCreator(this, &txNewConst, nIn,
+                                                           coin.first->vout[coin.second].nValue, SIGHASH_ALL), scriptPubKey, sigdata);
+                        else {
+                            CCoinsViewCache view(pcoinsTip);
+
+                            signSuccess = ProduceCoinSpend(TransactionSignatureCreator(this, &txNewConst, nIn,
+                                                                         coin.first->vout[coin.second].nValue, SIGHASH_ALL), mapWitness, view, scriptPubKey, sigdata,
+                                                                         false, coin.first->vout[coin.second].nValue);
+                        }
+                    }
                     else
                         signSuccess = ProduceSignature(DummySignatureCreator(this), scriptPubKey, sigdata);
 
                     if (!signSuccess)
                     {
                         strFailReason = _("Signing transaction failed");
+                        if (fPrivate)
+                            uiInterface.ShowProgress(_("Selecting coins..."), 100);
                         return false;
                     } else {
                         UpdateTransaction(txNew, nIn, sigdata);
+                        r_sum = (r_sum + sigdata.r) % Params().GetConsensus().ZeroCT_Params.coinCommitmentGroup.groupOrder;
                     }
 
                     nIn++;
                 }
+                if (fPrivate)
+                    uiInterface.ShowProgress(_("Selecting coins..."), 100);
 
                 unsigned int nBytes = GetVirtualTransactionSize(txNew);
 
@@ -2998,8 +3967,34 @@ bool CWallet::CreateTransaction(const vector<CRecipient>& vecSend, CWalletTx& wt
                 // Embed the constructed transaction data in wtxNew.
                 *static_cast<CTransaction*>(&wtxNew) = CTransaction(txNew);
 
+                for (unsigned int i = 0; i < gammas.size(); i++)
+                {
+                    gamma_sum = (gamma_sum + gammas[i]) % Params().GetConsensus().ZeroCT_Params.coinCommitmentGroup.groupOrder;
+                    gammas[i].Nullify();
+
+                }
+                for (unsigned int i = 0; i < values.size(); i++)
+                {
+                    values[i].Nullify();
+                }
+
+                CBigNum r_minus_gamma = r_sum - gamma_sum;
+
+                SerialNumberProofOfKnowledge txAmountSig = SerialNumberProofOfKnowledge(&Params().GetConsensus().ZeroCT_Params.coinCommitmentGroup,
+                                                               r_minus_gamma, wtxNew.GetHashAmountSig());
+
+                CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+                ss << txAmountSig;
+                wtxNew.vchTxSig = std::vector<unsigned char>(ss.begin(), ss.end());
+
+                wtxNew.UpdateHash();
+
+                r_minus_gamma.Nullify();
+                gamma_sum.Nullify();
+                r_sum.Nullify();
+
                 // Limit size
-                if (GetTransactionWeight(txNew) >= MAX_STANDARD_TX_WEIGHT)
+                if (GetTransactionWeight(txNew) >= (fPrivate ? MAX_PRIVATE_TX_WEIGHT : MAX_STANDARD_TX_WEIGHT))
                 {
                     strFailReason = _("Transaction too large");
                     return false;
@@ -3019,7 +4014,14 @@ bool CWallet::CreateTransaction(const vector<CRecipient>& vecSend, CWalletTx& wt
 
                 CAmount nFeeNeeded = GetMinimumFee(nBytes, nTxConfirmTarget, mempool);
 
-                nFeeNeeded = nFeeNeeded > 10000 ? nFeeNeeded : 10000;
+                if (fPrivate)
+                {
+                    nFeeNeeded = nFeeNeeded > 1000000 ? nFeeNeeded : 1000000;
+                }
+                else
+                {
+                    nFeeNeeded = nFeeNeeded > 10000 ? nFeeNeeded : 10000;
+                }
 
                 if (coinControl && nFeeNeeded > 0 && coinControl->nMinimumTotalFee > nFeeNeeded) {
                     nFeeNeeded = coinControl->nMinimumTotalFee;
@@ -3073,7 +4075,15 @@ bool CWallet::CommitTransaction(CWalletTx& wtxNew, CReserveKey& reservekey)
             set<CWalletTx*> setCoins;
             BOOST_FOREACH(const CTxIn& txin, wtxNew.vin)
             {
-                CWalletTx &coin = mapWallet[txin.prevout.hash];
+                COutPoint prevout = txin.prevout;
+                if (txin.scriptSig.IsZeroCTSpend()) {
+                    libzeroct::CoinSpend zcs(&Params().GetConsensus().ZeroCT_Params);
+                    assert(TxInToCoinSpend(&Params().GetConsensus().ZeroCT_Params, txin, zcs));
+                    if(!mapSerial.count(zcs.getCoinSerialNumber()))
+                        continue;
+                    prevout = mapSerial.at(zcs.getCoinSerialNumber());
+                }
+                CWalletTx &coin = mapWallet[prevout.hash];
                 coin.BindWallet(this);
                 NotifyTransactionChanged(this, coin.GetHash(), CT_UPDATED);
             }
@@ -3140,17 +4150,17 @@ CAmount CWallet::GetMinimumFee(unsigned int nTxBytes, unsigned int nConfirmTarge
 
 
 
-DBErrors CWallet::LoadWallet(bool& fFirstRunRet)
+DBErrors CWallet::LoadWallet(bool& fFirstRunRet, bool& fFirstZeroCTRunRet)
 {
     if (!fFileBacked)
         return DB_LOAD_OK;
     fFirstRunRet = false;
+    fFirstZeroCTRunRet = false;
     DBErrors nLoadWalletRet = CWalletDB(strWalletFile,"cr+").LoadWallet(this);
     if (nLoadWalletRet == DB_NEED_REWRITE)
     {
         if (CDB::Rewrite(strWalletFile, "\x04pool"))
         {
-            LOCK(cs_wallet);
             setKeyPool.clear();
             // Note: can't top-up keypool here, because wallet is locked.
             // User will be prompted to unlock wallet the next operation
@@ -3161,6 +4171,10 @@ DBErrors CWallet::LoadWallet(bool& fFirstRunRet)
     if (nLoadWalletRet != DB_LOAD_OK)
         return nLoadWalletRet;
     fFirstRunRet = !vchDefaultKey.IsValid();
+
+    libzeroct::ObfuscationValue oj; libzeroct::ObfuscationValue ok; libzeroct::BlindingCommitment bc; CKey zk;
+
+    fFirstZeroCTRunRet = !(zcParameters.zerokey.IsValid() && zcParameters.blindingCommitment.first != CBigNum() && zcParameters.blindingCommitment.second != CBigNum() && IsObfuscationSet());
 
     uiInterface.LoadWallet(this);
 
@@ -3204,6 +4218,8 @@ DBErrors CWallet::ZapWalletTx(std::vector<CWalletTx>& vWtx)
         {
             LOCK(cs_wallet);
             setKeyPool.clear();
+            mapSerial.clear();
+            mapWitness.clear();
             // Note: can't top-up keypool here, because wallet is locked.
             // User will be prompted to unlock wallet the next operation
             // that requires a new key.
@@ -3260,6 +4276,24 @@ bool CWallet::DelAddressBook(const CTxDestination& address)
         return false;
     CWalletDB(strWalletFile).ErasePurpose(CNavCoinAddress(address).ToString());
     return CWalletDB(strWalletFile).EraseName(CNavCoinAddress(address).ToString());
+}
+
+bool CWallet::SetZeroCTValues(const ObfuscationValue& obfuscationJ, const ObfuscationValue& obfuscationK, const BlindingCommitment& blindingCommitment, const CKey& zerokey)
+{
+    SetMinVersion(FEATURE_ZEROCT);
+
+    if(!(this->SetObfuscationJ(obfuscationJ) &&
+            this->SetObfuscationK(obfuscationK) &&
+            this->SetBlindingCommitment(blindingCommitment) &&
+            this->SetZeroKey(zerokey)))
+        return false;
+
+    if (fFileBacked)
+    {
+        if (!CWalletDB(strWalletFile).WriteZeroCTValues(this))
+            return false;
+    }
+    return true;
 }
 
 bool CWallet::SetDefaultKey(const CPubKey &vchPubKey)
@@ -3475,6 +4509,8 @@ set< set<CTxDestination> > CWallet::GetAddressGroupings()
             {
                 CTxDestination address;
                 if(!IsMine(txin)) /* If this input isn't mine, ignore it */
+                    continue;
+                if(!mapWallet.count(txin.prevout.hash))
                     continue;
                 if(!ExtractDestination(mapWallet[txin.prevout.hash].vout[txin.prevout.n].scriptPubKey, address))
                     continue;
@@ -3731,6 +4767,8 @@ public:
             vKeys.push_back(keyId);
     }
 
+    void operator()(const libzeroct::CPrivateAddress &keyId) { }
+
     void operator()(const pair<CKeyID, CKeyID> &keyId) {
         if (keystore.HaveKey(keyId.first))
             vKeys.push_back(keyId.first);
@@ -3902,8 +4940,9 @@ bool CWallet::InitLoadWallet()
 
     int64_t nStart = GetTimeMillis();
     bool fFirstRun = true;
+    bool fFirstZeroCTRun = true;
     CWallet *walletInstance = new CWallet(walletFile);
-    DBErrors nLoadWalletRet = walletInstance->LoadWallet(fFirstRun);
+    DBErrors nLoadWalletRet = walletInstance->LoadWallet(fFirstRun, fFirstZeroCTRun);
     if (nLoadWalletRet != DB_LOAD_OK)
     {
         if (nLoadWalletRet == DB_CORRUPT)
@@ -3970,6 +5009,37 @@ bool CWallet::InitLoadWallet()
             return InitError(strprintf(_("Error loading %s: You can't enable HD on a already existing non-HD wallet"), walletFile));
     }
 
+    if(fFirstZeroCTRun)
+    {
+        CKeyID masterKeyID = walletInstance->GetHDChain().masterKeyID;
+        CKey key;
+
+        if (!walletInstance->GetKey(masterKeyID, key))
+        {
+            InitWarning("Could not generate ZeroCT parameters. If your wallet is encrypted, you must first unlock your wallet and then trigger manually the parameter generation before being able to use the ZeroCT functionality!");
+            LogPrintf("Could not generate ZeroCT parameters. If your wallet is encrypted, you must first unlock your wallet and then trigger manually the parameter generation before being able to use the ZeroCT functionality!");
+        }
+        else
+        {
+            ObfuscationValue obfuscationj; ObfuscationValue obfuscationk; BlindingCommitment blindingcommitment; CKey zeroKey;
+            CHashWriter1024 h(0, 0);
+            std::vector<unsigned char> vKey(key.begin(), key.end());
+
+            h << vKey;
+
+            libzeroct::GenerateParameters(&Params().GetConsensus().ZeroCT_Params, h.GetHash(), obfuscationj, obfuscationk, blindingcommitment, zeroKey);
+
+            walletInstance->SetZeroCTValues(obfuscationj, obfuscationk, blindingcommitment, zeroKey);
+
+            obfuscationj.first.Nullify();
+            obfuscationj.second.Nullify();
+            obfuscationk.first.Nullify();
+            obfuscationk.second.Nullify();
+
+            LogPrintf("Generated ZeroCT parameters.\n");
+        }
+    }
+
     LogPrintf(" wallet      %15dms\n", GetTimeMillis() - nStart);
 
     RegisterValidationInterface(walletInstance);
@@ -4024,6 +5094,8 @@ bool CWallet::InitLoadWallet()
                     CWalletTx* copyTo = &mi->second;
                     copyTo->mapValue = copyFrom->mapValue;
                     copyTo->vOrderForm = copyFrom->vOrderForm;
+                    copyTo->vAmounts = copyFrom->vAmounts;
+                    copyTo->vPaymentIds = copyFrom->vPaymentIds;
                     copyTo->nTimeReceived = copyFrom->nTimeReceived;
                     copyTo->nTimeSmart = copyFrom->nTimeSmart;
                     copyTo->fFromMe = copyFrom->fFromMe;
@@ -4202,8 +5274,13 @@ int CMerkleTx::GetDepthInMainChain(const CBlockIndex* &pindexRet) const
 
 int CMerkleTx::GetBlocksToMaturity() const
 {
-    if (!(IsCoinBase() || IsCoinStake()) || GetBoolArg("-testnet",false))
+    if (!(IsCoinBase() || IsCoinStake()))
         return 0;
+    return max(0, (COINBASE_MATURITY+1) - GetDepthInMainChain());
+}
+
+int CMerkleTx::GetBlocksToMaturityZeroCT() const
+{
     return max(0, (COINBASE_MATURITY+1) - GetDepthInMainChain());
 }
 

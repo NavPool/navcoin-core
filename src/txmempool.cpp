@@ -35,7 +35,7 @@ CTxMemPoolEntry::CTxMemPoolEntry(const CTransaction& _tx, const CAmount& _nFee,
     nCountWithDescendants = 1;
     nSizeWithDescendants = GetTxSize();
     nModFeesWithDescendants = nFee;
-    CAmount nValueIn = _tx.GetValueOut()+nFee;
+    CAmount nValueIn = _tx.GetValueOut() + (_tx.HasZeroCTMint() ? 0 : nFee);
     assert(inChainInputValue <= nValueIn);
 
     feeDelta = 0;
@@ -419,9 +419,11 @@ bool CTxMemPool::addUnchecked(const uint256& hash, const CTxMemPoolEntry &entry,
 
     const CTransaction& tx = newit->GetTx();
     std::set<uint256> setParentTransactions;
-    for (unsigned int i = 0; i < tx.vin.size(); i++) {
-        mapNextTx.insert(std::make_pair(&tx.vin[i].prevout, &tx));
-        setParentTransactions.insert(tx.vin[i].prevout.hash);
+    if(!tx.IsZeroCTSpend()) {
+        for (unsigned int i = 0; i < tx.vin.size(); i++) {
+            mapNextTx.insert(std::make_pair(&tx.vin[i].prevout, &tx));
+            setParentTransactions.insert(tx.vin[i].prevout.hash);
+        }
     }
     // Don't bother worrying about child transactions of this one.
     // Normal case of a new transaction arriving is that there can't be any
@@ -459,6 +461,8 @@ void CTxMemPool::addAddressIndex(const CTxMemPoolEntry &entry, const CCoinsViewC
     uint256 txhash = tx.GetHash();
     for (unsigned int j = 0; j < tx.vin.size(); j++) {
         const CTxIn input = tx.vin[j];
+        if (input.scriptSig.IsZeroCTSpend())
+            continue;
         const CTxOut &prevout = view.GetOutputFor(input);
         if (prevout.scriptPubKey.IsPayToScriptHash()) {
             vector<unsigned char> hashBytes(prevout.scriptPubKey.begin()+2, prevout.scriptPubKey.begin()+22);
@@ -534,6 +538,8 @@ void CTxMemPool::addSpentIndex(const CTxMemPoolEntry &entry, const CCoinsViewCac
     uint256 txhash = tx.GetHash();
     for (unsigned int j = 0; j < tx.vin.size(); j++) {
         const CTxIn input = tx.vin[j];
+        if (input.scriptSig.IsZeroCTSpend())
+            continue;
         const CTxOut &prevout = view.GetOutputFor(input);
         uint160 addressHash;
         int addressType;
@@ -1121,6 +1127,14 @@ bool CCoinsViewMemPool::GetCoins(const uint256 &txid, CCoins &coins) const {
 
 bool CCoinsViewMemPool::HaveCoins(const uint256 &txid) const {
     return mempool.exists(txid) || base->HaveCoins(txid);
+}
+
+bool CCoinsViewMemPool::HaveMint(const CBigNum &mintValue) const {
+    return mempool.mapMint.count(mintValue) || base->HaveMint(mintValue);
+}
+
+bool CCoinsViewMemPool::HaveSpendSerial(const CBigNum &spendSerial) const {
+    return mempool.mapSerial.count(spendSerial) || base->HaveSpendSerial(spendSerial);
 }
 
 size_t CTxMemPool::DynamicMemoryUsage() const {

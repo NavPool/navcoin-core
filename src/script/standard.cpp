@@ -1,10 +1,12 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2015 The Bitcoin Core developers
+// Copyright (c) 2018 The NavCoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include "chainparams.h"
 #include "script/standard.h"
-
+#include "libzeroct/Keys.h"
 #include "pubkey.h"
 #include "script/script.h"
 #include "script/sign.h"
@@ -40,6 +42,7 @@ const char* GetTxnOutputType(txnouttype t)
     case TX_WITNESS_V0_KEYHASH: return "witness_v0_keyhash";
     case TX_WITNESS_V0_SCRIPTHASH: return "witness_v0_scripthash";
     case TX_COLDSTAKING: return "cold_staking";
+    case TX_ZEROCOIN: return "private_transaction";
     }
     return NULL;
 }
@@ -64,6 +67,24 @@ bool Solver(const CScript& scriptPubKey, txnouttype& typeRet, vector<vector<unsi
     }
 
     vSolutionsRet.clear();
+
+    if (scriptPubKey.IsZeroCTMint())
+    {
+        typeRet = TX_ZEROCOIN;
+        CPubKey p;
+        vector<unsigned char> c;
+        vector<unsigned char> i;
+        vector<unsigned char> a;
+        vector<unsigned char> ac;
+        if(!scriptPubKey.ExtractZeroCTMintData(p, c, i, a, ac))
+            return false;
+        vector<unsigned char> vp(p.begin(), p.end());
+        vSolutionsRet.push_back(vp);
+        vSolutionsRet.push_back(c);
+        vSolutionsRet.push_back(a);
+        vSolutionsRet.push_back(ac);
+        return true;
+    }
 
     // Shortcut for pay-to-script-hash, which are more constrained than the other types:
     // it is always OP_HASH160 20 [20 byte hash] OP_EQUAL
@@ -267,6 +288,10 @@ bool ExtractDestination(const CScript& scriptPubKey, CTxDestination& addressRet)
         addressRet = make_pair(CKeyID(uint160(vSolutions[0])), CKeyID(uint160(vSolutions[1])));
         return true;
     }
+    else if (whichType == TX_ZEROCOIN)
+    {
+        return false;
+    }
     // Multisig txns have more than one address...
     return false;
 }
@@ -337,7 +362,13 @@ class CScriptVisitor : public boost::static_visitor<bool>
 private:
     CScript *script;
 public:
-    CScriptVisitor(CScript *scriptin) { script = scriptin; }
+    std::pair<CBigNum, CBigNum>* rpval;
+
+    CScriptVisitor(CScript *scriptin) { script = scriptin; rpval = NULL; }
+    CScriptVisitor(CScript *scriptin, std::pair<CBigNum, CBigNum>* rpvalin) {
+        script = scriptin;
+        rpval = rpvalin;
+    }
 
     bool operator()(const CNoDestination &dest) const {
         script->clear();
@@ -361,6 +392,26 @@ public:
         *script << OP_HASH160 << ToByteVector(scriptID) << OP_EQUAL;
         return true;
     }
+
+    bool operator()(const libzeroct::CPrivateAddress &dest) const {
+        CPubKey zpk; libzeroct::BlindingCommitment bc;
+        if(!dest.GetPubKey(zpk))
+            return false;
+        if(!dest.GetBlindingCommitment(bc))
+            return false;
+
+        CBigNum tempdata;
+        libzeroct::PublicCoin pc(dest.GetParams(), zpk, bc, dest.GetPaymentId(), dest.GetAmount(), &tempdata);
+
+        dest.SetGamma(tempdata);
+        script->clear();
+
+        *script << OP_ZEROCTMINT << pc.getPubKey() << pc.getCoinValue().getvch()
+                << pc.getAmountCommitment().getvch() << pc.getPaymentId().getvch()
+                << pc.getAmount().getvch();
+
+        return true;
+    }
 };
 }
 
@@ -369,6 +420,7 @@ CScript GetScriptForDestination(const CTxDestination& dest)
     CScript script;
 
     boost::apply_visitor(CScriptVisitor(&script), dest);
+
     return script;
 }
 

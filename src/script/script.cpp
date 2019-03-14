@@ -4,7 +4,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include "script.h"
-
+#include "streams.h"
 #include "tinyformat.h"
 #include "utilstrencodings.h"
 
@@ -149,6 +149,11 @@ const char* GetOpName(opcodetype opcode)
 
     case OP_COINSTAKE              : return "OP_COINSTAKE";
 
+    // zerocoin
+    case OP_ZEROCTMINT           : return "OP_ZEROCTMINT";
+    case OP_ZEROCTSPEND          : return "OP_ZEROCTSPEND";
+    case OP_FEE                    : return "OP_FEE";
+
     case OP_INVALIDOPCODE          : return "OP_INVALIDOPCODE";
 
     // Note:
@@ -248,6 +253,27 @@ bool CScript::IsPayToPublicKey() const
       (*this)[34] == OP_CHECKSIG);
 }
 
+bool CScript::IsZeroCTMint() const
+{
+    //fast test for Zerocoin Mint CScripts
+    return (this->size() > 0 &&
+        (*this)[0] == OP_ZEROCTMINT);
+}
+
+bool CScript::IsFee() const
+{
+    return (this->size() == 1 &&
+        (*this)[0] == OP_FEE);
+}
+
+bool CScript::IsZeroCTSpend() const
+{
+    if (this->empty())
+        return false;
+
+    return ((*this)[0] == OP_ZEROCTSPEND);
+}
+
 bool CScript::IsCommunityFundContribution() const
 {
     return (this->size() == 2 &&
@@ -317,6 +343,37 @@ bool CScript::ExtractVote(uint256 &hash, bool &vote) const
 
     return true;
 }
+
+bool CScript::ExtractZeroCTMintData(CPubKey &zkey, std::vector<unsigned char> &commitment, std::vector<unsigned char> &paymentid, std::vector<unsigned char> &obfamount, std::vector<unsigned char> &amcommitment) const
+{
+    if(!IsZeroCTMint())
+        return false;
+
+    CPubKey key;
+    key.Set(this->begin()+2, this->begin()+2+(*this)[1]);
+    if(!key.IsValid())
+        return false;
+    zkey = key;
+
+    auto begin = this->begin()+3+(*this)[1];
+    auto end = begin + 1 + (*begin);
+    commitment = std::vector<unsigned char>(begin+1, end);
+
+    begin = end + 1;
+    end = begin + 1 + (*begin);
+    amcommitment = std::vector<unsigned char>(begin + 1, end);
+
+    begin = end;
+    end = begin + 1 + (*begin);
+    paymentid = std::vector<unsigned char>(begin + 1, end);
+
+    begin = end;
+    end = begin + 1 + (*begin);
+    obfamount = std::vector<unsigned char>(begin + 1, end);
+
+    return true;
+}
+
 
 bool CScript::IsPayToScriptHash() const
 {

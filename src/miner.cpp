@@ -34,6 +34,7 @@
 #include "versionbits.h"
 #include "wallet/wallet.h"
 #include "kernel.h"
+#include <zerochain.h>
 
 #include <algorithm>
 #include <boost/thread.hpp>
@@ -131,14 +132,11 @@ void BlockAssembler::resetBlock()
     fIncludeWitness = false;
 
     // These counters do not include coinbase tx
-    nBlockTx = 0;
-    nFees = 0;
-
     lastFewTxs = 0;
     blockFinished = false;
 }
 
-CBlockTemplate* BlockAssembler::CreateNewBlock(const CScript& scriptPubKeyIn, bool fProofOfStake, uint64_t* pFees)
+CBlockTemplate* BlockAssembler::CreateNewBlock(const CScript& scriptPubKeyIn, bool fProofOfStake)
 {
     resetBlock();
 
@@ -220,7 +218,7 @@ CBlockTemplate* BlockAssembler::CreateNewBlock(const CScript& scriptPubKeyIn, bo
     pblock->vtx[0] = coinbaseTx;
 
     pblocktemplate->vchCoinbaseCommitment = GenerateCoinbaseCommitment(*pblock, pindexPrev, chainparams.GetConsensus());
-    pblocktemplate->vTxFees[0] = -nFees;
+    pblocktemplate->vTxFees[0] = -pblocktemplate->nFees;
 
     // Fill in header
     pblock->hashPrevBlock  = pindexPrev->GetBlockHash();
@@ -230,9 +228,6 @@ CBlockTemplate* BlockAssembler::CreateNewBlock(const CScript& scriptPubKeyIn, bo
     pblock->nBits          = GetNextTargetRequired(pindexPrev, fProofOfStake);
     pblock->nNonce         = 0;
     pblocktemplate->vTxSigOpsCost[0] = WITNESS_SCALE_FACTOR * GetLegacySigOpCount(pblock->vtx[0]);
-
-    if (pFees)
-      *pFees = nFees;
 
     return pblocktemplate.release();
 }
@@ -358,7 +353,11 @@ void BlockAssembler::AddToBlock(CTxMemPool::txiter iter)
     nBlockWeight += iter->GetTxWeight();
     ++nBlockTx;
     nBlockSigOpsCost += iter->GetSigOpCost();
-    nFees += iter->GetFee();
+    if (iter->GetTx().IsZeroCTSpend() || iter->GetTx().HasZeroCTMint())
+        pblocktemplate->nPrivateFees += iter->GetFee();
+    else
+        pblocktemplate->nFees += iter->GetFee();
+
     inBlock.insert(iter);
 
     bool fPrintPriority = GetBoolArg("-printpriority", DEFAULT_PRINTPRIORITY);
@@ -726,9 +725,7 @@ void NavCoinStaker(const CChainParams& chainparams)
             //
             // Create new block
             //
-            uint64_t nFees = 0;
-
-            std::unique_ptr<CBlockTemplate> pblocktemplate(BlockAssembler(Params()).CreateNewBlock(coinbaseScript->reserveScript, true, &nFees));
+            std::unique_ptr<CBlockTemplate> pblocktemplate(BlockAssembler(Params()).CreateNewBlock(coinbaseScript->reserveScript, true));
             if (!pblocktemplate.get())
             {
                 LogPrintf("Error in NavCoinStaker: Keypool ran out, please call keypoolrefill before restarting the staking thread\n");
@@ -740,28 +737,33 @@ void NavCoinStaker(const CChainParams& chainparams)
             //     ::GetSerializeSize(*pblock, SER_NETWORK, PROTOCOL_VERSION));
 
             //Trying to sign a block
-            if (SignBlock(pblock, *pwalletMain, nFees, chainparams))
+            if (SignBlock(pblock, *pwalletMain, pblocktemplate->nFees, pblocktemplate->nPrivateFees, chainparams))
             {
                 LogPrint("coinstake", "PoS Block signed\n");
                 SetThreadPriority(THREAD_PRIORITY_NORMAL);
                 CheckStake(pblock, *pwalletMain, chainparams);
                 SetThreadPriority(THREAD_PRIORITY_LOWEST);
                 MilliSleep(500);
-            } else {
-                MilliSleep(nMinerSleep);
             }
+            else
+                MilliSleep(nMinerSleep);
+
         }
-    } catch (const boost::thread_interrupted&) {
+    }
+    catch (const boost::thread_interrupted&)
+    {
         LogPrintf("NavCoinStaker terminated\n");
         throw;
-    } catch (const std::runtime_error &e) {
+    }
+    catch (const std::runtime_error &e)
+    {
         LogPrintf("NavCoinStaker runtime error: %s\n", e.what());
         return;
     }
 }
 
 #ifdef ENABLE_WALLET
-bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParams& chainparams)
+bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, int64_t nPrivateFees, const CChainParams& chainparams)
 {
   std::vector<CTransaction> vtx = pblock->vtx;
   // if we are trying to sign
@@ -790,9 +792,10 @@ bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParam
 
   if (nSearchTime > nLastCoinStakeSearchTime)
   {
-
       int64_t nSearchInterval = nBestHeight+1 > 0 ? 1 : nSearchTime - nLastCoinStakeSearchTime;
-      if (wallet.CreateCoinStake(wallet, pblock->nBits, nSearchInterval, nFees, txCoinStake, key))
+      CBigNum zerokey;
+      CBigNum r_minus_gamma;
+      if (wallet.CreateCoinStake(wallet, pblock->nBits, nSearchInterval, chainActive.Tip()->nAccumulatedPublicFee+nFees, chainActive.Tip()->nAccumulatedPrivateFee+nPrivateFees, txCoinStake, key, zerokey, sCoinStakeStrDZeel, r_minus_gamma))
       {
           ApplyCommunityFundToCoinBase(pblock->vtx[0], chainparams, key);
           if (txCoinStake.nTime >= chainActive.Tip()->GetPastTimeLimit()+1)
@@ -805,11 +808,6 @@ bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParam
               //    our transactions set
               for (vector<CTransaction>::iterator it = vtx.begin(); it != vtx.end();)
                   if (it->nTime > pblock->nTime) { it = vtx.erase(it); } else { ++it; }
-
-              txCoinStake.nVersion = CTransaction::TXDZEEL_VERSION_V2;
-              txCoinStake.strDZeel = sCoinStakeStrDZeel == "" ?
-                          GetArg("-stakervote","") + ";" + std::to_string(CLIENT_VERSION) :
-                          sCoinStakeStrDZeel;
 
               for(unsigned int i = 0; i < vCoinStakeOutputs.size(); i++)
               {
@@ -830,10 +828,16 @@ bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParam
               }
 
               // After the changes, we need to resign inputs.
+              bool fZeroStake = false;
 
               CTransaction txNewConst(txCoinStake);
+
               for(unsigned int i = 0; i < txCoinStake.vin.size(); i++)
               {
+                  if (txCoinStake.vin[i].scriptSig.IsZeroCTSpend())
+                      fZeroStake = true;
+                  if (fZeroStake)
+                      continue;
                   bool signSuccess;
                   uint256 prevHash = txCoinStake.vin[i].prevout.hash;
                   uint32_t n = txCoinStake.vin[i].prevout.n;
@@ -862,10 +866,41 @@ bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParam
                       pblock->vtx.insert(pblock->vtx.begin() + 2, forcedTx);
               }
 
+              const libzeroct::ZeroCTParams* params = &Params().GetConsensus().ZeroCT_Params;
+              const libzeroct::IntegerGroupParams* group = &params->coinCommitmentGroup;
+
+              if (fZeroStake)
+              {
+                  SerialNumberProofOfKnowledge txAmountSig = SerialNumberProofOfKnowledge(group,
+                                                                                          r_minus_gamma,
+                                                                                          txNew.GetHashAmountSig());
+
+                  CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+                  ss << txAmountSig;
+                  *const_cast<std::vector<unsigned char>*>(&pblock->vtx[1].vchTxSig) = std::vector<unsigned char>(ss.begin(), ss.end());
+                  txNew.UpdateHash();
+
+                  r_minus_gamma.Nullify();
+              }
 
               pblock->vtx[0].UpdateHash();
+              pblock->vtx[1].UpdateHash();
               pblock->hashMerkleRoot = BlockMerkleRoot(*pblock);
-              return key.Sign(pblock->GetHash(), pblock->vchBlockSig);
+
+
+              if (fZeroStake)
+              {
+                  SerialNumberProofOfKnowledge serialNumberPoK = SerialNumberProofOfKnowledge(group,
+                                                                                              zerokey,
+                                                                                              pblock->GetHash());
+
+                  CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+                  ss << serialNumberPoK;
+                  pblock->vchBlockSig = std::vector<unsigned char>(ss.begin(), ss.end());
+
+                  return true;
+              } else
+                  return key.Sign(pblock->GetHash(), pblock->vchBlockSig);
           }
       }
       nLastCoinStakeSearchInterval = nSearchTime - nLastCoinStakeSearchTime;
@@ -966,21 +1001,21 @@ void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& 
 
 bool CheckStake(CBlock* pblock, CWallet& wallet, const CChainParams& chainparams)
 {
-    arith_uint256 proofHash = arith_uint256(0), hashTarget = arith_uint256(0);
+    uint256 proofHash = 0, hashTarget = 0;
     uint256 hashBlock = pblock->GetHash();
 
     if(!pblock->IsProofOfStake())
-        return error("CheckStake() : %s is not a proof-of-stake block", hashBlock.GetHex());
+        return error("CheckStake() : %s is not a proof-of-stake block.", hashBlock.GetHex());
 
     if (mapBlockIndex.count(pblock->hashPrevBlock) == 0)
         return error("CheckStake(): could not find previous block");
 
     // verify hash target and signature of coinstake tx
-    if (!CheckProofOfStake(mapBlockIndex[pblock->hashPrevBlock], pblock->vtx[1], pblock->nBits, proofHash, hashTarget, NULL))
+    if (!CheckProofOfStake(mapBlockIndex[pblock->hashPrevBlock], pblock->vtx[1], pcoinsTip, pblock->nBits, proofHash, hashTarget, NULL))
         return error("CheckStake() : proof-of-stake checking failed");
 
     //// debug print
-    LogPrintf("CheckStake() : new proof-of-stake block found hash: %s\n", hashBlock.GetHex());
+    LogPrintf("CheckStake() : new proof-of-stake block found hash: %s coinstake: %s\n", hashBlock.GetHex(), pblock->vtx[1].GetHash().ToString());
 
     // Found a solution
     {

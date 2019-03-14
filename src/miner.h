@@ -43,6 +43,8 @@ struct CBlockTemplate
     std::vector<CAmount> vTxFees;
     std::vector<int64_t> vTxSigOpsCost;
     std::vector<unsigned char> vchCoinbaseCommitment;
+    CAmount nFees;
+    CAmount nPrivateFees;
 };
 
 // Container for tracking updates to ancestor feerate as we include (parent)
@@ -162,7 +164,6 @@ private:
     uint64_t nBlockSize;
     uint64_t nBlockTx;
     uint64_t nBlockSigOpsCost;
-    CAmount nFees;
     CTxMemPool::setEntries inBlock;
 
     // Chain context for the block
@@ -177,7 +178,7 @@ private:
 public:
     BlockAssembler(const CChainParams& chainparams);
     /** Construct a new block template with coinbase to scriptPubKeyIn */
-    CBlockTemplate* CreateNewBlock(const CScript& scriptPubKeyIn, bool fProofOfStake, uint64_t* pFees);
+    CBlockTemplate* CreateNewBlock(const CScript& scriptPubKeyIn, bool fProofOfStake);
 
 private:
     // utility functions
@@ -223,7 +224,7 @@ void IncrementExtraNonce(CBlock* pblock, const CBlockIndex* pindexPrev, unsigned
 int64_t UpdateTime(CBlockHeader* pblock, const Consensus::Params& consensusParams, const CBlockIndex* pindexPrev);
 
 // NAVCoin - Mining/Staking thread
-bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParams& chainparams);
+bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, int64_t nPrivateFees, const CChainParams& chainparams);
 
 /** Add cfund votes to the coinbase */
 void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& chainparams, CKey key);

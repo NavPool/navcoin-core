@@ -1,5 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2015 The Bitcoin Core developers
+// Copyright (c) 2018 The NavCoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -7,6 +8,7 @@
 #define NAVCOIN_WALLET_WALLET_H
 
 #include "amount.h"
+#include "libzeroct/bignum.h"
 #include "streams.h"
 #include "tinyformat.h"
 #include "ui_interface.h"
@@ -17,6 +19,7 @@
 #include "wallet/walletdb.h"
 #include "wallet/rpcwallet.h"
 #include "primitives/transaction.h"
+#include "zeromint.h"
 
 #include <algorithm>
 #include <map>
@@ -84,6 +87,8 @@ enum WalletFeature
     FEATURE_COMPRPUBKEY = 60000, // compressed public keys
 
     FEATURE_HD = 130000, // Hierarchical key derivation after BIP32 (HD Wallet)
+    FEATURE_ZEROCT = 140000, // ZeroCT support
+
     FEATURE_LATEST = FEATURE_COMPRPUBKEY // HD is optional, use FEATURE_COMPRPUBKEY as latest version
 };
 
@@ -210,6 +215,7 @@ public:
     int GetDepthInMainChain() const { const CBlockIndex *pindexRet; return GetDepthInMainChain(pindexRet); }
     bool IsInMainChain() const { const CBlockIndex *pindexRet; return GetDepthInMainChain(pindexRet) > 0; }
     int GetBlocksToMaturity() const;
+    int GetBlocksToMaturityZeroCT() const;
     /** Pass this transaction to the mempool. Fails if absolute fee exceeds absurd fee. */
     bool AcceptToMemoryPool(bool fLimitFree, const CAmount nAbsurdFee);
     bool hashUnset() const { return (hashBlock.IsNull() || hashBlock == ABANDON_HASH); }
@@ -229,6 +235,9 @@ private:
 public:
     mapValue_t mapValue;
     std::vector<std::pair<std::string, std::string> > vOrderForm;
+    std::vector<CAmount> vAmounts;
+    std::vector<std::string> vPaymentIds;
+
     unsigned int fTimeReceivedIsTxTime;
     unsigned int nTimeReceived; //!< time received by this node
     unsigned int nTimeSmart;
@@ -242,11 +251,14 @@ public:
     mutable bool fDebitCached;
     mutable bool fCreditCached;
     mutable bool fImmatureCreditCached;
+    mutable bool fImmaturePrivateCreditCached;
     mutable bool fAvailableCreditCached;
     mutable bool fWatchDebitCached;
     mutable bool fWatchCreditCached;
     mutable bool fColdStakingCreditCached;
     mutable bool fColdStakingDebitCached;
+    mutable bool fPrivateCreditCached;
+    mutable bool fPrivateDebitCached;
     mutable bool fImmatureWatchCreditCached;
     mutable bool fAvailableWatchCreditCached;
     mutable bool fChangeCached;
@@ -254,11 +266,14 @@ public:
     mutable CAmount nDebitCached;
     mutable CAmount nCreditCached;
     mutable CAmount nImmatureCreditCached;
+    mutable CAmount nImmaturePrivateCreditCached;
     mutable CAmount nAvailableCreditCached;
     mutable CAmount nWatchDebitCached;
     mutable CAmount nWatchCreditCached;
     mutable CAmount nColdStakingCreditCached;
     mutable CAmount nColdStakingDebitCached;
+    mutable CAmount nPrivateCreditCached;
+    mutable CAmount nPrivateDebitCached;
     mutable CAmount nImmatureWatchCreditCached;
     mutable CAmount nAvailableWatchCreditCached;
     mutable CAmount nChangeCached;
@@ -291,6 +306,8 @@ public:
         pwallet = pwalletIn;
         mapValue.clear();
         vOrderForm.clear();
+        vAmounts.clear();
+        vPaymentIds.clear();
         fTimeReceivedIsTxTime = false;
         nTimeReceived = 0;
         nTimeSmart = 0;
@@ -305,6 +322,8 @@ public:
         fWatchCreditCached = false;
         fColdStakingCreditCached = false;
         fColdStakingDebitCached = false;
+        fPrivateCreditCached = false;
+        fPrivateDebitCached = false;
         fImmatureWatchCreditCached = false;
         fAvailableWatchCreditCached = false;
         fSpendsColdStaking = false;
@@ -317,6 +336,8 @@ public:
         nAvailableCreditCached = 0;
         nColdStakingCreditCached = 0;
         nColdStakingDebitCached = 0;
+        nPrivateCreditCached = 0;
+        nPrivateDebitCached = 0;
         nWatchDebitCached = 0;
         nWatchCreditCached = 0;
         nAvailableWatchCreditCached = 0;
@@ -361,6 +382,12 @@ public:
             ReadOrderPos(nOrderPos, mapValue);
 
             nTimeSmart = mapValue.count("timesmart") ? (unsigned int)atoi64(mapValue["timesmart"]) : 0;
+        }
+
+        if (IsZeroCT())
+        {
+            READWRITE(vAmounts);
+            READWRITE(vPaymentIds);
         }
 
         mapValue.erase("fromaccount");
@@ -450,6 +477,8 @@ public:
     CAmount GetImmatureCredit(bool fUseCache=true) const;
     CAmount GetAvailableCredit(bool fUseCache=true) const;
     CAmount GetAvailableStakableCredit() const;
+    CAmount GetAvailablePrivateCredit() const;
+    CAmount GetImmaturePrivateCredit(const bool& fUseCache=true) const;
     CAmount GetImmatureWatchOnlyCredit(const bool& fUseCache=true) const;
     CAmount GetAvailableWatchOnlyCredit(const bool& fUseCache=true) const;
     CAmount GetChange() const;
@@ -486,6 +515,7 @@ struct CRecipient
     CAmount nAmount;
     bool fSubtractFeeFromAmount;
     std::string strDZeel;
+    CBigNum gamma;
 };
 
 
@@ -498,15 +528,17 @@ public:
     int nDepth;
     bool fSpendable;
     bool fSolvable;
+    std::string sPaymentId;
+    CAmount nAmount;
 
-    COutput(const CWalletTx *txIn, int iIn, int nDepthIn, bool fSpendableIn, bool fSolvableIn)
+    COutput(const CWalletTx *txIn, int iIn, int nDepthIn, bool fSpendableIn, bool fSolvableIn, std::string sPaymentIdIn = "", CAmount nAmountIn = 0)
     {
-        tx = txIn; i = iIn; nDepth = nDepthIn; fSpendable = fSpendableIn; fSolvable = fSolvableIn;
+        tx = txIn; i = iIn; nDepth = nDepthIn; fSpendable = fSpendableIn; fSolvable = fSolvableIn; sPaymentId = sPaymentIdIn; nAmount = nAmountIn;
     }
 
-    COutput(const CWalletTx *txIn, const CTransaction *ptxIn, int iIn, int nDepthIn, bool fSpendableIn, bool fSolvableIn)
+    COutput(const CWalletTx *txIn, const CTransaction *ptxIn, int iIn, int nDepthIn, bool fSpendableIn, bool fSolvableIn, std::string sPaymentIdIn = "")
     {
-        tx = txIn; ptx = ptxIn; i = iIn; nDepth = nDepthIn; fSpendable = fSpendableIn; fSolvable = fSolvableIn;
+        tx = txIn; ptx = ptxIn; i = iIn; nDepth = nDepthIn; fSpendable = fSpendableIn; fSolvable = fSolvableIn; sPaymentId = sPaymentIdIn;
     }
 
     std::string ToString() const;
@@ -637,7 +669,9 @@ private:
      */
     bool SelectCoins(const std::vector<COutput>& vAvailableCoins, const CAmount& nTargetValue, std::set<std::pair<const CWalletTx*,unsigned int> >& setCoinsRet, CAmount& nValueRet, const CCoinControl *coinControl = NULL) const;
     bool SelectCoinsForStaking(int64_t nTargetValue, unsigned int nSpendTime, std::set<std::pair<const CWalletTx*,unsigned int> >& setCoinsRet, int64_t& nValueRet) const;
+    bool SelectZeroCoinsForStaking(int64_t nTargetValue, unsigned int nSpendTime, std::set<std::pair<const CWalletTx*,unsigned int> >& setCoinsRet, int64_t& nValueRet) const;
     void AvailableCoinsForStaking(std::vector<COutput>& vCoins, unsigned int nSpendTime) const;
+    void AvailableZeroCoinsForStaking(std::vector<COutput>& vCoins, unsigned int nSpendTime) const;
 
     CWalletDB *pwalletdbEncryption;
 
@@ -678,6 +712,7 @@ public:
      *      strWalletFile (immutable after instantiation)
      */
     mutable CCriticalSection cs_wallet;
+    mutable CCriticalSection cs_witnesser;
 
     bool fFileBacked;
     std::string strWalletFile;
@@ -728,6 +763,8 @@ public:
 
 
     std::map<uint256, CWalletTx> mapWallet;
+    std::map<CBigNum, COutPoint> mapSerial;
+    std::map<CBigNum, PublicMintWitnessData> mapWitness;
     std::list<CAccountingEntry> laccentries;
 
     typedef std::pair<CWalletTx*, CAccountingEntry*> TxPair;
@@ -745,6 +782,10 @@ public:
 
     int64_t nTimeFirstKey;
 
+    bool WriteSerial(const CBigNum& bnSerialNumber, COutPoint& out);
+
+    bool WriteWitness(const CBigNum& bnSerialNumber, PublicMintWitnessData& witness);
+
     const CWalletTx* GetWalletTx(const uint256& hash) const;
 
     //! check whether we are allowed to upgrade (or already support) to the named feature
@@ -753,7 +794,8 @@ public:
     /**
      * populate vCoins with vector of available COutputs.
      */
-    void AvailableCoins(std::vector<COutput>& vCoins, bool fOnlyConfirmed=true, const CCoinControl *coinControl = NULL, bool fIncludeZeroValue=false, bool fIncludeColdStaking=false) const;
+    void AvailableCoins(std::vector<COutput>& vCoins, bool fOnlyConfirmed=true, const CCoinControl *coinControl = NULL, bool fIncludeZeroValue = false, bool fIncludeColdStaking = false) const;
+    void AvailablePrivateCoins(vector<COutput>& vCoins, bool fOnlyConfirmed, const CCoinControl *coinControl = NULL, bool fIncludeZeroValue = false) const;
 
     /**
      * Shuffle and select coins until nTargetValue is reached while avoiding
@@ -770,8 +812,9 @@ public:
     void UnlockCoin(const COutPoint& output);
     void UnlockAllCoins();
     void ListLockedCoins(std::vector<COutPoint>& vOutpts);
+    uint64_t GetZeroStakeWeight() const;
     uint64_t GetStakeWeight() const;
-    bool CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int64_t nSearchInterval, int64_t nFees, CMutableTransaction& txNew, CKey& key);
+    bool CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int64_t nSearchInterval, int64_t nFees, int64_t nPrivateFees, CMutableTransaction& txNew, CKey& key, CBigNum& serialNumberPrivKey, std::string sCoinStakeStrDZeel, CBigNum& r_minus_gamma);
     int64_t GetStake() const;
     int64_t GetNewMint() const;
 
@@ -835,6 +878,7 @@ public:
     std::vector<uint256> ResendWalletTransactionsBefore(int64_t nTime);
     CAmount GetBalance() const;
     CAmount GetColdStakingBalance() const;
+    CAmount GetPrivateBalance() const;
     CAmount GetUnconfirmedBalance() const;
     CAmount GetImmatureBalance() const;
     CAmount GetWatchOnlyBalance() const;
@@ -845,7 +889,7 @@ public:
      * Insert additional inputs into the transaction by
      * calling CreateTransaction();
      */
-    bool FundTransaction(CMutableTransaction& tx, CAmount& nFeeRet, bool overrideEstimatedFeeRate, const CFeeRate& specificFeeRate, int& nChangePosInOut, std::string& strFailReason, bool includeWatching, bool lockUnspents, const CTxDestination& destChange = CNoDestination());
+    bool FundTransaction(CMutableTransaction& tx, CAmount& nFeeRet, bool overrideEstimatedFeeRate, const CFeeRate& specificFeeRate, int& nChangePosInOut, std::string& strFailReason, bool includeWatching, bool lockUnspents, const CTxDestination& destChange = CNoDestination(), bool fPrivate = false);
 
     /**
      * Create a new transaction paying the recipients with a set of coins
@@ -853,7 +897,7 @@ public:
      * @note passing nChangePosInOut as -1 will result in setting a random position
      */
     bool CreateTransaction(const std::vector<CRecipient>& vecSend, CWalletTx& wtxNew, CReserveKey& reservekey, CAmount& nFeeRet, int& nChangePosInOut,
-                           std::string& strFailReason, const CCoinControl *coinControl = NULL, bool sign = true, std::string strDZeel = "");
+                           std::string& strFailReason, bool fPrivate, const CCoinControl *coinControl = NULL, bool sign = true, std::string strDZeel = "");
     bool CommitTransaction(CWalletTx& wtxNew, CReserveKey& reservekey);
 
     bool AddAccountingEntry(const CAccountingEntry&, CWalletDB & pwalletdb);
@@ -901,7 +945,7 @@ public:
     CAmount GetChange(const CTransaction& tx) const;
     void SetBestChain(const CBlockLocator& loc);
 
-    DBErrors LoadWallet(bool& fFirstRunRet);
+    DBErrors LoadWallet(bool& fFirstRunRet, bool &fFirstZeroCTRunRet);
     DBErrors ZapWalletTx(std::vector<CWalletTx>& vWtx);
     DBErrors ZapSelectTx(std::vector<uint256>& vHashIn, std::vector<uint256>& vHashOut);
 
@@ -935,6 +979,8 @@ public:
     }
 
     bool SetDefaultKey(const CPubKey &vchPubKey);
+    bool SetZeroCTValues(const libzeroct::ObfuscationValue& obfuscationJ, const libzeroct::ObfuscationValue& obfuscationK,
+                         const libzeroct::BlindingCommitment& blindingCommitment, const CKey& zerokey);
 
     //! signify that a particular wallet feature is now used. this may change nWalletVersion and nWalletMaxVersion if those are lower
     bool SetMinVersion(enum WalletFeature, CWalletDB* pwalletdbIn = NULL, bool fExplicit = false);

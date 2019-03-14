@@ -32,6 +32,8 @@ static const char DB_BEST_BLOCK = 'B';
 static const char DB_FLAG = 'F';
 static const char DB_REINDEX_FLAG = 'R';
 static const char DB_LAST_BLOCK = 'l';
+static const char DB_ZEROCT_MINTINDEX = 'M';
+static const char DB_ZEROCT_SPENDINDEX = 'S';
 
 CCoinsViewDB::CCoinsViewDB(size_t nCacheSize, bool fMemory, bool fWipe) : db(GetDataDir() / "chainstate", nCacheSize, fMemory, fWipe, true, false, 64)
 {
@@ -41,8 +43,21 @@ bool CCoinsViewDB::GetCoins(const uint256 &txid, CCoins &coins) const {
     return db.Read(make_pair(DB_COINS, txid), coins);
 }
 
+bool CCoinsViewDB::GetMint(const CBigNum &mintValue, PublicMintChainData &mintData) const {
+    return db.Read(make_pair(DB_ZEROCT_MINTINDEX, mintValue), mintData);
+}
+
 bool CCoinsViewDB::HaveCoins(const uint256 &txid) const {
     return db.Exists(make_pair(DB_COINS, txid));
+}
+
+bool CCoinsViewDB::HaveMint(const CBigNum &mintValue) const {
+    PublicMintChainData mintData;
+    return db.Exists(make_pair(DB_ZEROCT_MINTINDEX, mintValue)) && db.Read(make_pair(DB_ZEROCT_MINTINDEX, mintValue), mintData) && !mintData.IsNull();
+}
+
+bool CCoinsViewDB::HaveSpendSerial(const CBigNum &spendSerial) const {
+    return db.Exists(make_pair(DB_ZEROCT_SPENDINDEX, spendSerial));
 }
 
 uint256 CCoinsViewDB::GetBestBlock() const {
@@ -52,7 +67,7 @@ uint256 CCoinsViewDB::GetBestBlock() const {
     return hashBestChain;
 }
 
-bool CCoinsViewDB::BatchWrite(CCoinsMap &mapCoins, const uint256 &hashBlock) {
+bool CCoinsViewDB::BatchWrite(CCoinsMap &mapCoins, std::map<CBigNum, PublicMintChainData>& mapMintValue, std::map<CBigNum, bool>& mapSpendSerial, const uint256 &hashBlock) {
     CDBBatch batch(db);
     size_t count = 0;
     size_t changed = 0;
@@ -68,10 +83,37 @@ bool CCoinsViewDB::BatchWrite(CCoinsMap &mapCoins, const uint256 &hashBlock) {
         CCoinsMap::iterator itOld = it++;
         mapCoins.erase(itOld);
     }
+    size_t new_mint = 0;
+    size_t del_mint = 0;
+    for (const std::pair<CBigNum, PublicMintChainData>& it: mapMintValue)
+    {
+        if (it.second.IsNull()) {
+            batch.Erase(make_pair(DB_ZEROCT_MINTINDEX, it.first));
+            del_mint++;
+        } else {
+            batch.Write(make_pair(DB_ZEROCT_MINTINDEX, it.first), it.second);
+            new_mint++;
+        }
+    }
+    size_t new_serial = 0;
+    size_t del_serial = 0;
+    for (const std::pair<CBigNum, bool>& it: mapSpendSerial)
+    {
+        if (it.second) {
+            batch.Write(make_pair(DB_ZEROCT_SPENDINDEX, it.first), it.second);
+            new_serial++;
+        } else {
+            batch.Erase(make_pair(DB_ZEROCT_SPENDINDEX, it.first));
+            del_serial++;
+        }
+    }
+
     if (!hashBlock.IsNull())
         batch.Write(DB_BEST_BLOCK, hashBlock);
 
     LogPrint("coindb", "Committing %u changed transactions (out of %u) to coin database...\n", (unsigned int)changed, (unsigned int)count);
+    LogPrint("coindb", "Committing %u new mints and %u new spend serials to coin database...\n", (unsigned int)new_mint, (unsigned int)new_serial);
+    LogPrint("coindb", "Removed %u mints and %u spend serials from the coin database...\n", (unsigned int)del_mint, (unsigned int)del_serial);
     return db.WriteBatch(batch);
 }
 
@@ -463,6 +505,17 @@ bool CBlockTreeDB::LoadBlockIndexGuts(boost::function<CBlockIndex*(const uint256
                 pindexNew->prevoutStake   = diskindex.prevoutStake;
                 pindexNew->nStakeTime     = diskindex.nStakeTime;
                 pindexNew->hashProof      = diskindex.hashProof;
+                pindexNew->nMoneySupply   = diskindex.nMoneySupply;
+
+                //zerocoin
+                pindexNew->nAccumulatorValue
+                                          = diskindex.nAccumulatorValue;
+//                pindexNew->mapZerocoinSupply
+//                                          = diskindex.mapZerocoinSupply;
+                pindexNew->nAccumulatedPrivateFee
+                                          = diskindex.nAccumulatedPrivateFee;
+                pindexNew->nAccumulatedPublicFee
+                                          = diskindex.nAccumulatedPublicFee;
 
                 pcursor->Next();
             } else {

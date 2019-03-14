@@ -1,5 +1,6 @@
 // Copyright (c) 2010 Satoshi Nakamoto
 // Copyright (c) 2009-2015 The Bitcoin Core developers
+// Copyright (c) 2018 The NavCoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -88,7 +89,7 @@ public:
         consensus.nMajorityWindow = 1000;
         consensus.BIP34Height = 900000;
         consensus.BIP34Hash = uint256S("0xecb7444214d068028ec1fa4561662433452c1cbbd6b0f8eeb6452bcfa1d0a7d6");
-        consensus.powLimit = ArithToUint256(~arith_uint256(0) >> 16);
+        consensus.powLimit = ~uint256(0) >> 16;
         consensus.nPowTargetTimespan = 30;
         consensus.nPowTargetSpacing = 30;
         consensus.fPowAllowMinDifficultyBlocks = false;
@@ -125,6 +126,19 @@ public:
         consensus.nMaxFutureDrift = 60;
         consensus.nStaticReward = 2 * COIN;
         consensus.nHeightv451Fork = 2722100;
+        consensus.nHeightv452Fork = 2882875;
+
+        /** Zerocoin */
+        consensus.zerocoinModulus = "25195908475657893494027183240048398571429282126204032027777137836043662020707595556264018525880784"
+                                    "4069182906412495150821892985591491761845028084891200728449926873928072877767359714183472702618963750149718246911"
+                                    "6507761337985909570009733045974880842840179742910064245869181719511874612151517265463228221686998754918242243363"
+                                    "7259085141865462043576798423387184774447920739934236584823824281198163815010674810451660377306056201619676256133"
+                                    "8441436038339044149526344321901146575444541784240209246165157233507787077498171257724679629263863563732899121548"
+                                    "31438167899885040445364023527381951378636564391212010397122822120720357";
+
+        CBigNum bnModulus;
+        bnModulus.SetDec(consensus.zerocoinModulus);
+        consensus.ZeroCT_Params = libzeroct::ZeroCTParams(bnModulus);
 
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].bit = 28;
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].nStartTime = 1199145601; // January 1, 2008
@@ -144,6 +158,11 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_CSV_LEGACY].nStartTime = 1462060800; // May 1st, 2016
         consensus.vDeployments[Consensus::DEPLOYMENT_CSV_LEGACY].nTimeout = 1525132800; // May 1st, 2018
 
+        // Deployment of Community Fund
+        consensus.vDeployments[Consensus::DEPLOYMENT_COMMUNITYFUND].bit = 6;
+        consensus.vDeployments[Consensus::DEPLOYMENT_COMMUNITYFUND].nStartTime = 1493424000; // May 1st, 2017
+        consensus.vDeployments[Consensus::DEPLOYMENT_COMMUNITYFUND].nTimeout = 1556668800; // May 1st, 2019
+
         // Deployment of Cold Staking
         consensus.vDeployments[Consensus::DEPLOYMENT_COLDSTAKING].bit = 3;
         consensus.vDeployments[Consensus::DEPLOYMENT_COLDSTAKING].nStartTime = 1525132800; // May 1st, 2018
@@ -153,11 +172,6 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_SEGWIT].bit = 4;
         consensus.vDeployments[Consensus::DEPLOYMENT_SEGWIT].nStartTime = 1493424000; // May 1st, 2017
         consensus.vDeployments[Consensus::DEPLOYMENT_SEGWIT].nTimeout = 1525132800; // May 1st, 2018
-
-        // Deployment of Community Fund
-        consensus.vDeployments[Consensus::DEPLOYMENT_COMMUNITYFUND].bit = 6;
-        consensus.vDeployments[Consensus::DEPLOYMENT_COMMUNITYFUND].nStartTime = 1493424000; // May 1st, 2017
-        consensus.vDeployments[Consensus::DEPLOYMENT_COMMUNITYFUND].nTimeout = 1556668800; // May 1st, 2019
 
         // Deployment of Community Fund Accumulation
         consensus.vDeployments[Consensus::DEPLOYMENT_COMMUNITYFUND_ACCUMULATION].bit = 7;
@@ -178,6 +192,11 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_COMMUNITYFUND_AMOUNT_V2].bit = 16;
         consensus.vDeployments[Consensus::DEPLOYMENT_COMMUNITYFUND_AMOUNT_V2].nStartTime = 1533081600; // Aug 1st, 2018
         consensus.vDeployments[Consensus::DEPLOYMENT_COMMUNITYFUND_AMOUNT_V2].nTimeout = 1564617600; // Aug 1st, 2019
+
+        // Deployment of Zerocoin
+        consensus.vDeployments[Consensus::DEPLOYMENT_ZEROCT].bit = 18;
+        consensus.vDeployments[Consensus::DEPLOYMENT_ZEROCT].nStartTime = 1538352000; // May 1st, 2018
+        consensus.vDeployments[Consensus::DEPLOYMENT_ZEROCT].nTimeout = 1601510400; // May 1st, 2019
 
         // Deployment of Static Reward
         consensus.vDeployments[Consensus::DEPLOYMENT_STATIC_REWARD].bit = 15;
@@ -200,7 +219,7 @@ public:
         pchMessageStart[3] = 0x20;
         nDefaultPort = 44440;
         nPruneAfterHeight = 100000;
-        bnProofOfWorkLimit = arith_uint256(~arith_uint256() >> 16);
+        bnProofOfWorkLimit = ~uint256() >> 16;
 
         genesis = CreateGenesisBlock(1460561040, 6945, 0x1f00ffff, 1, 0);
 
@@ -211,6 +230,9 @@ public:
 
         base58Prefixes[PUBKEY_ADDRESS] = std::vector<unsigned char>(1,53);
         base58Prefixes[COLDSTAKING_ADDRESS] = std::vector<unsigned char>(1,21); // cold staking addresses start with 'X'
+        base58Prefixes[PRIVATE_ADDRESS] = boost::assign::list_of(74)(7).convert_to_container<std::vector<unsigned char> >(); // Starts with ZN
+        base58Prefixes[PRIVATE_SPEND_KEY] = std::vector<unsigned char>(2,29); //
+        base58Prefixes[PRIVATE_VIEW_KEY] = std::vector<unsigned char>(2,32); //
         base58Prefixes[SCRIPT_ADDRESS] = std::vector<unsigned char>(1,85);
         base58Prefixes[SECRET_KEY] =     std::vector<unsigned char>(1,150);
         base58Prefixes[EXT_PUBLIC_KEY] = boost::assign::list_of(0x04)(0x88)(0xB2)(0x1E).convert_to_container<std::vector<unsigned char> >();
@@ -276,7 +298,7 @@ public:
         consensus.nMajorityWindow = 1000;
         consensus.BIP34Height = 900000;
         consensus.BIP34Hash = uint256S("0xecb7444214d068028ec1fa4561662433452c1cbbd6b0f8eeb6452bcfa1d0a7d6");
-        consensus.powLimit = ArithToUint256(~arith_uint256(0) >> 16);
+        consensus.powLimit = ~uint256(0) >> 16;
         consensus.nPowTargetTimespan = 30;
         consensus.nPowTargetSpacing = 30;
         consensus.fPowAllowMinDifficultyBlocks = false;
@@ -314,8 +336,22 @@ public:
         consensus.nPaymentRequestMaxVersion = 3;
         consensus.nProposalMaxVersion = 3;
         consensus.nMaxFutureDrift = 60;
+
+        /** Zerocoin */
+        consensus.zerocoinModulus = "25195908475657893494027183240048398571429282126204032027777137836043662020707595556264018525880784"
+                                    "4069182906412495150821892985591491761845028084891200728449926873928072877767359714183472702618963750149718246911"
+                                    "6507761337985909570009733045974880842840179742910064245869181719511874612151517265463228221686998754918242243363"
+                                    "7259085141865462043576798423387184774447920739934236584823824281198163815010674810451660377306056201619676256133"
+                                    "8441436038339044149526344321901146575444541784240209246165157233507787077498171257724679629263863563732899121548"
+                                    "31438167899885040445364023527381951378636564391212010397122822120720357";
+
+        CBigNum bnModulus;
+        bnModulus.SetDec(consensus.zerocoinModulus);
+        consensus.ZeroCT_Params = libzeroct::ZeroCTParams(bnModulus);
+
         consensus.nStaticReward = 2 * COIN;
         consensus.nHeightv451Fork = 100000;
+        consensus.nHeightv452Fork = 100000;
 
         // Deployment of BIP68, BIP112, and BIP113.
         consensus.vDeployments[Consensus::DEPLOYMENT_CSV].bit = 0;
@@ -357,6 +393,11 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_COMMUNITYFUND_AMOUNT_V2].nStartTime = 1533081600; // Aug 1st, 2018
         consensus.vDeployments[Consensus::DEPLOYMENT_COMMUNITYFUND_AMOUNT_V2].nTimeout = 1564617600; // Aug 1st, 2019
 
+        // Deployment of Zerocoin
+        consensus.vDeployments[Consensus::DEPLOYMENT_ZEROCT].bit = 18;
+        consensus.vDeployments[Consensus::DEPLOYMENT_ZEROCT].nStartTime = 1538352000; // May 1st, 2018
+        consensus.vDeployments[Consensus::DEPLOYMENT_ZEROCT].nTimeout = 1601510400; // May 1st, 2019
+
         // Deployment of Static Reward
         consensus.vDeployments[Consensus::DEPLOYMENT_STATIC_REWARD].bit = 15;
         consensus.vDeployments[Consensus::DEPLOYMENT_STATIC_REWARD].nStartTime = 1533081600; // August 1st, 2018
@@ -373,18 +414,18 @@ public:
          * a large 32-bit integer with any alignment.
          */
         pchMessageStart[0] = 0x3f;
-        pchMessageStart[1] = 0xa4;
-        pchMessageStart[2] = 0x52;
-        pchMessageStart[3] = 0x22;
+        pchMessageStart[1] = 0xf4;
+        pchMessageStart[2] = 0xf2;
+        pchMessageStart[3] = 0x82;
         nDefaultPort = 15556;
         nPruneAfterHeight = 1000;
-        bnProofOfWorkLimit = arith_uint256(~arith_uint256() >> 16);
+        bnProofOfWorkLimit = ~uint256() >> 16;
     
-        uint32_t nTimestamp = 1541978905;
-        uint256 hashGenesisBlock = uint256S("0x0000c493d0f928a9f0a0eb0e0d88d871f4f5ab8bacc308f77bb0e8c7adee1307");
-        uint256 hashMerkleRoot = uint256S("0xf3f3286d731fc322d34f6a7c4df3eecfc1abaa6032350acf6cd363eb34edf574");
-        uint32_t nNonce = 2043537527;
-	    
+        uint32_t nTimestamp = 1552555000;
+        uint256 hashGenesisBlock = uint256S("0x0000cb1d606d1a423120cf03730407055b90cd0c3f8e8e06229ea9d60e71a0cd");
+        uint256 hashMerkleRoot = uint256S("0x02b0e7d2880a949812202aad0c36e5ad3ddbaac81a163c3366aea3d89b0ecca5");
+        uint32_t nNonce = 2043220475;
+
         genesis = CreateGenesisBlockTestnet(nTimestamp, nNonce, 0x1d00ffff, 1, 0);
         consensus.hashGenesisBlock = genesis.GetHash();
 	    
@@ -408,6 +449,9 @@ public:
 
         base58Prefixes[PUBKEY_ADDRESS] = std::vector<unsigned char>(1,111);
         base58Prefixes[COLDSTAKING_ADDRESS] = std::vector<unsigned char>(1,8); // cold staking addresses start with 'C/D'
+        base58Prefixes[PRIVATE_ADDRESS] = boost::assign::list_of(74)(64).convert_to_container<std::vector<unsigned char> >(); // Starts with ZT
+        base58Prefixes[PRIVATE_SPEND_KEY] = std::vector<unsigned char>(2,29); //
+        base58Prefixes[PRIVATE_VIEW_KEY] = std::vector<unsigned char>(2,32); //
         base58Prefixes[SCRIPT_ADDRESS] = std::vector<unsigned char>(1,196);
         base58Prefixes[SECRET_KEY] =     std::vector<unsigned char>(1,239);
         base58Prefixes[EXT_PUBLIC_KEY] = boost::assign::list_of(0x40)(0x88)(0x2B)(0xE1).convert_to_container<std::vector<unsigned char> >();
@@ -446,8 +490,8 @@ public:
         consensus.nMajorityRejectBlockOutdated = 950;
         consensus.nMajorityWindow = 1000;
         consensus.BIP34Height = 900000;
-        consensus.BIP34Hash = uint256S("0x0");
-        consensus.powLimit = ArithToUint256(~arith_uint256(0) >> 16);
+        consensus.BIP34Hash = 0;
+        consensus.powLimit = ~uint256(0) >> 16;
         consensus.nPowTargetTimespan = 30;
         consensus.nPowTargetSpacing = 30;
         consensus.fPowAllowMinDifficultyBlocks = false;
@@ -487,6 +531,19 @@ public:
         consensus.nMaxFutureDrift = 60000;
         consensus.nStaticReward = 2 * COIN;
         consensus.nHeightv451Fork = 1000;
+        consensus.nHeightv452Fork = 1000;
+
+        /** Zerocoin */
+        consensus.zerocoinModulus = "25195908475657893494027183240048398571429282126204032027777137836043662020707595556264018525880784"
+                                    "4069182906412495150821892985591491761845028084891200728449926873928072877767359714183472702618963750149718246911"
+                                    "6507761337985909570009733045974880842840179742910064245869181719511874612151517265463228221686998754918242243363"
+                                    "7259085141865462043576798423387184774447920739934236584823824281198163815010674810451660377306056201619676256133"
+                                    "8441436038339044149526344321901146575444541784240209246165157233507787077498171257724679629263863563732899121548"
+                                    "31438167899885040445364023527381951378636564391212010397122822120720357";
+
+        CBigNum bnModulus;
+        bnModulus.SetDec(consensus.zerocoinModulus);
+        consensus.ZeroCT_Params = libzeroct::ZeroCTParams(bnModulus);
 
         // Deployment of BIP68, BIP112, and BIP113.
         consensus.vDeployments[Consensus::DEPLOYMENT_CSV].bit = 0;
@@ -528,6 +585,11 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_COMMUNITYFUND_AMOUNT_V2].nStartTime = 1533081600; // Aug 1st, 2018
         consensus.vDeployments[Consensus::DEPLOYMENT_COMMUNITYFUND_AMOUNT_V2].nTimeout = 1564617600; // Aug 1st, 2019
 
+        // Deployment of Zerocoin
+        consensus.vDeployments[Consensus::DEPLOYMENT_ZEROCT].bit = 18;
+        consensus.vDeployments[Consensus::DEPLOYMENT_ZEROCT].nStartTime = 1538352000; // May 1st, 2018
+        consensus.vDeployments[Consensus::DEPLOYMENT_ZEROCT].nTimeout = 1601510400; // May 1st, 2019
+
         // Deployment of Static Reward
         consensus.vDeployments[Consensus::DEPLOYMENT_STATIC_REWARD].bit = 15;
         consensus.vDeployments[Consensus::DEPLOYMENT_STATIC_REWARD].nStartTime = 1533081600; // August 1st, 2018
@@ -549,7 +611,7 @@ public:
         pchMessageStart[3] = 0xfa;
         nDefaultPort = 18886;
         nPruneAfterHeight = 1000;
-        bnProofOfWorkLimit = arith_uint256(~arith_uint256() >> 16);
+        bnProofOfWorkLimit = ~uint256() >> 16;
 
         // To create a new devnet:
         //
@@ -589,6 +651,9 @@ public:
 
         base58Prefixes[PUBKEY_ADDRESS] = std::vector<unsigned char>(1,111);
         base58Prefixes[COLDSTAKING_ADDRESS] = std::vector<unsigned char>(1,63); // cold staking addresses start with 'S'
+        base58Prefixes[PRIVATE_ADDRESS] = boost::assign::list_of(74)(37).convert_to_container<std::vector<unsigned char> >(); // Starts with ZR
+        base58Prefixes[PRIVATE_SPEND_KEY] = std::vector<unsigned char>(2,29); //
+        base58Prefixes[PRIVATE_VIEW_KEY] = std::vector<unsigned char>(2,32); //
         base58Prefixes[SCRIPT_ADDRESS] = std::vector<unsigned char>(1,196);
         base58Prefixes[SECRET_KEY] =     std::vector<unsigned char>(1,239);
         base58Prefixes[EXT_PUBLIC_KEY] = boost::assign::list_of(0x40)(0x88)(0x2B)(0xE1).convert_to_container<std::vector<unsigned char> >();
@@ -628,7 +693,7 @@ public:
         consensus.nMajorityWindow = 1000;
         consensus.BIP34Height = 900000;
         consensus.BIP34Hash = uint256S("0xecb7444214d068028ec1fa4561662433452c1cbbd6b0f8eeb6452bcfa1d0a7d6");
-        consensus.powLimit = ArithToUint256(~arith_uint256(0) >> 1);
+        consensus.powLimit = ~uint256(0) >> 1;
         consensus.nPowTargetTimespan = 30;
         consensus.nPowTargetSpacing = 30;
         consensus.fPowAllowMinDifficultyBlocks = false;
@@ -668,6 +733,19 @@ public:
         consensus.nMaxFutureDrift = 60000;
         consensus.nStaticReward = 2 * COIN;
         consensus.nHeightv451Fork = 1000;
+        consensus.nHeightv452Fork = 1000;
+
+        /** Zerocoin */
+        consensus.zerocoinModulus = "25195908475657893494027183240048398571429282126204032027777137836043662020707595556264018525880784"
+                                    "4069182906412495150821892985591491761845028084891200728449926873928072877767359714183472702618963750149718246911"
+                                    "6507761337985909570009733045974880842840179742910064245869181719511874612151517265463228221686998754918242243363"
+                                    "7259085141865462043576798423387184774447920739934236584823824281198163815010674810451660377306056201619676256133"
+                                    "8441436038339044149526344321901146575444541784240209246165157233507787077498171257724679629263863563732899121548"
+                                    "31438167899885040445364023527381951378636564391212010397122822120720357";
+
+        CBigNum bnModulus;
+        bnModulus.SetDec(consensus.zerocoinModulus);
+        consensus.ZeroCT_Params = libzeroct::ZeroCTParams(bnModulus);
 
         // Deployment of BIP68, BIP112, and BIP113.
         consensus.vDeployments[Consensus::DEPLOYMENT_CSV].bit = 0;
@@ -709,6 +787,11 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_COMMUNITYFUND_AMOUNT_V2].nStartTime = 1533081600; // Aug 1st, 2018
         consensus.vDeployments[Consensus::DEPLOYMENT_COMMUNITYFUND_AMOUNT_V2].nTimeout = 1564617600; // Aug 1st, 2019
 
+        // Deployment of Zerocoin
+        consensus.vDeployments[Consensus::DEPLOYMENT_ZEROCT].bit = 18;
+        consensus.vDeployments[Consensus::DEPLOYMENT_ZEROCT].nStartTime = 1538352000; // May 1st, 2018
+        consensus.vDeployments[Consensus::DEPLOYMENT_ZEROCT].nTimeout = 1601510400; // May 1st, 2019
+
         // Deployment of Static Reward
         consensus.vDeployments[Consensus::DEPLOYMENT_STATIC_REWARD].bit = 15;
         consensus.vDeployments[Consensus::DEPLOYMENT_STATIC_REWARD].nStartTime = 1533081600; // August 1st, 2018
@@ -730,7 +813,7 @@ public:
         pchMessageStart[3] = 0x89;
         nDefaultPort = 18886;
         nPruneAfterHeight = 1000;
-        bnProofOfWorkLimit = arith_uint256(~arith_uint256() >> 16);
+        bnProofOfWorkLimit = ~uint256() >> 16;
 
         uint32_t nTimestamp = GetTimeNow();
         uint256 hashGenesisBlock = uint256S("0x0000e01b12644af6917e5aada637a609dd9590ad6bdc4828cd8df95258d85c02");
@@ -760,6 +843,9 @@ public:
 
         base58Prefixes[PUBKEY_ADDRESS] = std::vector<unsigned char>(1,111);
         base58Prefixes[COLDSTAKING_ADDRESS] = std::vector<unsigned char>(1,63); // cold staking addresses start with 'S'
+        base58Prefixes[PRIVATE_ADDRESS] = boost::assign::list_of(74)(37).convert_to_container<std::vector<unsigned char> >(); // Starts with ZR
+        base58Prefixes[PRIVATE_SPEND_KEY] = std::vector<unsigned char>(2,29); //
+        base58Prefixes[PRIVATE_VIEW_KEY] = std::vector<unsigned char>(2,32); //
         base58Prefixes[SCRIPT_ADDRESS] = std::vector<unsigned char>(1,196);
         base58Prefixes[SECRET_KEY] =     std::vector<unsigned char>(1,239);
         base58Prefixes[EXT_PUBLIC_KEY] = boost::assign::list_of(0x40)(0x88)(0x2B)(0xE1).convert_to_container<std::vector<unsigned char> >();

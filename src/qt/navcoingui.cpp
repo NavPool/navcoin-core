@@ -142,6 +142,9 @@ NavCoinGUI::NavCoinGUI(const PlatformStyle *platformStyle, const NetworkStyle *n
     openRPCConsoleAction(0),
     openAction(0),
     showHelpMessageAction(0),
+    unlockWalletAction(0),
+    lockWalletAction(0),
+    toggleStakingAction(0),
     trayIcon(0),
     trayIconMenu(0),
     notificator(0),
@@ -151,12 +154,9 @@ NavCoinGUI::NavCoinGUI(const PlatformStyle *platformStyle, const NetworkStyle *n
     spinnerFrame(0),
     fDontShowAgain(false),
     lastDialogShown(0),
-    unlockWalletAction(0),
-    lockWalletAction(0),
-    toggleStakingAction(0),
+    platformStyle(platformStyle),
     updatePriceAction(0),
-    fShowingVoting(0),
-    platformStyle(platformStyle)
+    fShowingVoting(0)
 {
     GUIUtil::restoreWindowGeometry("nWindow", QSize(840, 600), this);
     //setFixedSize(QSize(840, 600));
@@ -1665,6 +1665,7 @@ void NavCoinGUI::updateWeight()
         return;
 
     nWeight = pwalletMain->GetStakeWeight();
+    nZeroWeight = pwalletMain->GetZeroStakeWeight();
 }
 
 
@@ -1804,7 +1805,7 @@ void NavCoinGUI::updateStakingStatus()
             walletFrame->setStakingStatus(tr("Staking is turned off."));
             walletFrame->showLockStaking(false);
         }
-        else if (nLastCoinStakeSearchInterval && nWeight)
+        else if (nLastCoinStakeSearchInterval && (nWeight || nZeroWeight))
         {
             bool fFoundProposal = false;
             bool fFoundPaymentRequest = false;
@@ -1871,10 +1872,11 @@ void NavCoinGUI::updateStakingStatus()
             }
 
             uint64_t nWeight = this->nWeight;
+            uint64_t nZeroWeight = this->nZeroWeight;
             uint64_t nNetworkWeight = GetPoSKernelPS();
             int nBestHeight = pindexBestHeader->nHeight;
 
-            unsigned nEstimateTime = GetTargetSpacing(nBestHeight) * nNetworkWeight / nWeight;
+            unsigned nEstimateTime = GetTargetSpacing(nBestHeight) * nNetworkWeight / (nWeight + nZeroWeight);
 
             QString text;
             if (nEstimateTime > 60)
@@ -1894,6 +1896,7 @@ void NavCoinGUI::updateStakingStatus()
             }
 
             nWeight /= COIN;
+            nZeroWeight /= COIN;
             nNetworkWeight /= COIN;
 
     //        labelStakingIcon->setPixmap(QIcon(fUseBlackTheme ? ":/icons/black/staking_on" : ":/icons/staking_on").pixmap(STATUSBAR_ICONSIZE,STATUSBAR_ICONSIZE));
@@ -1909,7 +1912,7 @@ void NavCoinGUI::updateStakingStatus()
                 walletFrame->setStakingStatus(tr("Not staking because wallet is offline"));
             else if (IsInitialBlockDownload())
                 walletFrame->setStakingStatus(tr("Not staking because wallet is syncing"));
-            else if (!nWeight)
+            else if (!nWeight && !nZeroWeight)
                 walletFrame->setStakingStatus(tr("Not staking because you don't have mature coins"));
             else
                 walletFrame->setStakingStatus(tr("Not staking, please wait"));
