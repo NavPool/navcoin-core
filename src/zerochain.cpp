@@ -52,7 +52,7 @@ bool CheckZeroCTMint(const ZeroCTParams *params, const CTxOut& txout, const CCoi
     PublicMintChainData zeroMint;
     int nHeight;
 
-    if (view.HaveMint(pubCoin.getValue()))
+    if (view.GetMint(pubCoin.getValue(), zeroMint) && !zeroMint.IsNull())
         return error("%s: pubcoin %s was already accumulated in tx %s from block %d", __func__,
                      pubCoin.getValue().GetHex().substr(0, 8),
                      zeroMint.GetTxHash().GetHex(), nHeight);
@@ -157,6 +157,8 @@ bool CountMintsFromHeight(unsigned int nInitialHeight, unsigned int& nRet)
 
 bool CalculateWitnessForMint(const CTxOut& txout, const CCoinsViewCache& view, const libzeroct::PublicCoin& pubCoin, Accumulator& accumulator, AccumulatorWitness& accumulatorWitness, CBigNum& accumulatorValue, uint256& blockAccumulatorHash, std::string& strError, int nRequiredMints, int nMaxHeight)
 {
+    const libzeroct::ZeroCTParams* params = &Params().GetConsensus().ZeroCT_Params;
+
     if (!txout.IsZeroCTMint()) {
         strError = "Transaction output script is not a ZeroCT mint.";
         return false;
@@ -192,6 +194,8 @@ bool CalculateWitnessForMint(const CTxOut& txout, const CCoinsViewCache& view, c
 
     if(pindex->nAccumulatorValue != 0)
         accumulator.setValue(pindex->nAccumulatorValue);
+    else
+        accumulator.setValue(params->accumulatorParams.accumulatorBase);
 
     accumulatorWitness.resetValue(accumulator, pubCoin);
 
@@ -217,9 +221,9 @@ bool CalculateWitnessForMint(const CTxOut& txout, const CCoinsViewCache& view, c
                     if (!out.IsZeroCTMint())
                         continue;
 
-                    PublicCoin pubCoinOut(&Params().GetConsensus().ZeroCT_Params);
+                    PublicCoin pubCoinOut(params);
 
-                    if (!TxOutToPublicCoin(&Params().GetConsensus().ZeroCT_Params, out, pubCoinOut)) {
+                    if (!TxOutToPublicCoin(params, out, pubCoinOut)) {
                         strError = strprintf("Could not extract ZeroCT mint data");
                         return false;
                     }

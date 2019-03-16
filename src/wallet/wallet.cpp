@@ -499,7 +499,7 @@ bool CWallet::CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int
     int64_t nBalance = GetBalance() + GetColdStakingBalance();
     int64_t nPrivateBalance = GetPrivateBalance();
 
-    if (nBalance <= nReserveBalance)
+    if ((nBalance + nPrivateBalance) <= nReserveBalance)
         return false;
 
     set<pair<const CWalletTx*,unsigned int> > vwtxPrev;
@@ -515,7 +515,7 @@ bool CWallet::CreateCoinStake(const CKeyStore& keystore, unsigned int nBits, int
         return false;
 
     // Select zerocoins with suitable depth
-    if (!SelectZeroCoinsForStaking(nBalance - nReserveBalance, txNew.nTime, setZeroCoins, nZeroValueIn))
+    if (!SelectZeroCoinsForStaking(nPrivateBalance - nReserveBalance, txNew.nTime, setZeroCoins, nZeroValueIn))
         return false;
 
     if (setCoins.empty() && setZeroCoins.empty())
@@ -2149,8 +2149,8 @@ CAmount CWallet::GetDebit(const CTxIn &txin, const isminefilter& filter) const
         if (txin.scriptSig.IsZeroCTSpend()) {
             libzeroct::CoinSpend zcs(&Params().GetConsensus().ZeroCT_Params);
             assert(TxInToCoinSpend(&Params().GetConsensus().ZeroCT_Params, txin, zcs));
-            if(!mapSerial.count(zcs.getCoinSerialNumber())) {LogPrintf("Not my input %s\n", txin.ToString());
-                return 0;}
+            if(!mapSerial.count(zcs.getCoinSerialNumber()))
+                return 0;
             prevout = mapSerial.at(zcs.getCoinSerialNumber());
         }
         map<uint256, CWalletTx>::const_iterator mi = mapWallet.find(prevout.hash);
@@ -2418,7 +2418,7 @@ void CWalletTx::GetAmounts(list<COutputEntry>& listReceived,
 
         CAmount amount = txout.IsZeroCTMint() ? vAmounts[i] : txout.nValue;
 
-        COutputEntry output = {address, amount, (int)i};
+        COutputEntry output = {address, amount, (int)i, txout.scriptPubKey};
 
         // If we are debited by the transaction, add the output as a "sent" entry
         if (nDebit > 0)
@@ -2692,7 +2692,7 @@ CAmount CWalletTx::GetCredit(const isminefilter& filter) const
                 if (!txout.IsZeroCTMint())
                     continue;
 
-                CAmount amount = vAmounts[i];
+                CAmount amount = i < vAmounts.size() ? vAmounts[i] : 0;
 
                 if (!MoneyRange(amount))
                     throw std::runtime_error("CWallet::GetAvailableCredit(): value out of range");
@@ -3851,7 +3851,8 @@ bool CWallet::CreateTransaction(const vector<CRecipient>& vecSend, CWalletTx& wt
                 else
                     reservekey.ReturnKey();
 
-                txNew.vout.push_back(CTxOut(nFeeRet, CScript(OP_FEE)));
+                if (fZeroCT || fPrivate)
+                    txNew.vout.push_back(CTxOut(nFeeRet, CScript(OP_FEE)));
                 
                 // Fill vin
                 //

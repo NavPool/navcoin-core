@@ -24,6 +24,7 @@
 #include "wallet.h"
 #include "walletdb.h"
 #include "zerowallet.h"
+#include "zerotx.h"
 
 #include <stdint.h>
 
@@ -89,6 +90,47 @@ void WalletTxToJSON(const CWalletTx& wtx, UniValue& entry)
     entry.push_back(Pair("time", wtx.GetTxTime()));
     entry.push_back(Pair("timereceived", (int64_t)wtx.nTimeReceived));
     entry.push_back(Pair("strdzeel", wtx.strDZeel));
+    if (wtx.IsZeroCT()) {
+        if (wtx.HasZeroCTMint()) {
+            UniValue zeroct(UniValue::VARR);
+            if (wtx.vAmounts.size() > 0) {
+                for (unsigned int i = 0; i < wtx.vAmounts.size(); i++) {
+                    UniValue item(UniValue::VOBJ);
+                    item.push_back(Pair("nout", to_string(i)));
+                    item.push_back(Pair("spent", pwalletMain->IsSpent(wtx.GetHash(), i)));
+                    item.push_back(Pair("amount", wtx.vAmounts[i]));
+                    item.push_back(Pair("payment_id", wtx.vPaymentIds[i]));
+                    zeroct.push_back(item);
+                }
+            }
+            entry.push_back(Pair("zeroct_output_data", zeroct));
+        }
+        if (wtx.IsZeroCTSpend()) {
+            UniValue zeroctin(UniValue::VARR);
+            for (unsigned int i = 0; i < wtx.vin.size(); i++) {
+                CTxIn txin = wtx.vin[i];
+                if (!txin.scriptSig.IsZeroCTSpend())
+                    continue;
+                libzeroct::CoinSpend zcs(&Params().GetConsensus().ZeroCT_Params);
+                assert(TxInToCoinSpend(&Params().GetConsensus().ZeroCT_Params, txin, zcs));
+                if(!pwalletMain->mapSerial.count(zcs.getCoinSerialNumber()))
+                    continue;
+                COutPoint prevout = pwalletMain->mapSerial.at(zcs.getCoinSerialNumber());
+                if (!pwalletMain->mapWallet.count(prevout.hash))
+                    continue;
+                CWalletTx prevwtx = pwalletMain->mapWallet.at(prevout.hash);
+                if (prevwtx.vAmounts.size() <= prevout.n)
+                    continue;
+                UniValue item(UniValue::VOBJ);
+                item.push_back(Pair("nin", to_string(i)));
+                item.push_back(Pair("spent", pwalletMain->IsSpent(prevwtx.GetHash(), i)));
+                item.push_back(Pair("amount", prevwtx.vAmounts[prevout.n]));
+                item.push_back(Pair("payment_id", prevwtx.vPaymentIds[prevout.n]));
+                zeroctin.push_back(item);
+            }
+            entry.push_back(Pair("zeroct_input_data", zeroctin));
+        }
+    }
     // Add opt-in RBF status
     std::string rbfStatus = "no";
     if (confirms <= 0) {
@@ -1849,10 +1891,11 @@ void ListTransactions(const CWalletTx& wtx, const string& strAccount, int nMinDe
                     stop = true; // only one coinstake output
                 }
                 entry.push_back(Pair("canStake", (::IsMine(*pwalletMain, r.destination) & ISMINE_STAKABLE ||
+                                                  ::IsMine(*pwalletMain, r.script) & ISMINE_SPENDABLE_PRIVATE ||
                                                   (::IsMine(*pwalletMain, r.destination) & ISMINE_SPENDABLE &&
                                                    !CNavCoinAddress(r.destination).IsColdStakingAddress(Params()))) ? true : false));
                 entry.push_back(Pair("canSpend", (::IsMine(*pwalletMain, r.destination) & ISMINE_SPENDABLE ||
-                                                  ::IsMine(*pwalletMain, r.destination) & ISMINE_SPENDABLE_PRIVATE) ? true : false));
+                                                  ::IsMine(*pwalletMain, r.script) & ISMINE_SPENDABLE_PRIVATE) ? true : false));
                 if (pwalletMain->mapAddressBook.count(r.destination))
                     entry.push_back(Pair("label", account));
                 entry.push_back(Pair("vout", r.vout));
@@ -2190,12 +2233,13 @@ UniValue gettransaction(const UniValue& params, bool fHelp)
     if (!EnsureWalletIsAvailable(fHelp))
         return NullUniValue;
 
-    if (fHelp || params.size() < 1 || params.size() > 2)
+    if (fHelp || params.size() < 1 || params.size() > 3)
         throw runtime_error(
-            "gettransaction \"txid\" ( includeWatchonly )\n"
+            "gettransaction \"txid\" ( includeHex includeWatchonly )\n"
             "\nGet detailed information about in-wallet transaction <txid>\n"
             "\nArguments:\n"
             "1. \"txid\"    (string, required) The transaction id\n"
+            "1. \"includeHex\"    (bool, optional, default=false) Whether to include the transaction hex data\n"
             "2. \"includeWatchonly\"    (bool, optional, default=false) Whether to include watchonly addresses in balance calculation and details[]\n"
             "\nResult:\n"
             "{\n"
@@ -2234,9 +2278,14 @@ UniValue gettransaction(const UniValue& params, bool fHelp)
     uint256 hash;
     hash.SetHex(params[0].get_str());
 
-    isminefilter filter = ISMINE_SPENDABLE;
+    bool includeHex = false;
     if(params.size() > 1)
-        if(params[1].get_bool())
+        if(params[1].isBool())
+            includeHex = params[1].get_bool();
+
+    isminefilter filter = ISMINE_SPENDABLE;
+    if(params.size() > 2)
+        if(params[2].get_bool())
             filter = filter | ISMINE_WATCH_ONLY;
 
     UniValue entry(UniValue::VOBJ);
@@ -2244,10 +2293,13 @@ UniValue gettransaction(const UniValue& params, bool fHelp)
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid or non-wallet transaction id");
     const CWalletTx& wtx = pwalletMain->mapWallet[hash];
 
+    if (wtx.IsZeroCT())
+        filter = filter | ISMINE_SPENDABLE_PRIVATE;
+
     CAmount nCredit = wtx.GetCredit(filter);
     CAmount nDebit = wtx.GetDebit(filter);
     CAmount nNet = nCredit - nDebit;
-    CAmount nFee = (wtx.IsFromMe(filter) ? wtx.GetValueOut() - nDebit : 0);
+    CAmount nFee = (wtx.IsFromMe(filter) ? (wtx.IsZeroCT() ? wtx.GetFee() : wtx.GetValueOut() - nDebit) : 0);
 
     entry.push_back(Pair("amount", ValueFromAmount(nNet - nFee)));
     if (wtx.IsFromMe(filter))
@@ -2259,8 +2311,11 @@ UniValue gettransaction(const UniValue& params, bool fHelp)
     ListTransactions(wtx, "*", 0, false, details, filter);
     entry.push_back(Pair("details", details));
 
-    string strHex = EncodeHexTx(static_cast<CTransaction>(wtx));
-    entry.push_back(Pair("hex", strHex));
+
+    if (includeHex) {
+        string strHex = EncodeHexTx(static_cast<CTransaction>(wtx));
+        entry.push_back(Pair("hex", strHex));
+    }
 
     return entry;
 }
@@ -2932,6 +2987,65 @@ UniValue listunspent(const UniValue& params, bool fHelp)
     return results;
 }
 
+
+UniValue listprivateunspent(const UniValue& params, bool fHelp)
+{
+    if (!EnsureWalletIsAvailable(fHelp))
+        return NullUniValue;
+
+    if (fHelp || params.size() > 3)
+        throw runtime_error(
+            "listprivateunspent ( minconf maxconf )\n"
+            "\nReturns array of unspent private transaction outputs\n"
+            "with between minconf and maxconf (inclusive) confirmations.\n"
+            "\nArguments:\n"
+            "1. minconf          (numeric, optional, default=1) The minimum confirmations to filter\n"
+            "2. maxconf          (numeric, optional, default=9999999) The maximum confirmations to filter\n"
+            "\nResult\n"
+            "[                   (array of json object)\n"
+            "  {\n"
+            "    \"txid\" : \"txid\",          (string) the transaction id \n"
+            "    \"vout\" : n,                 (numeric) the vout value\n"
+            "    \"amount\" : x.xxx,           (numeric) the transaction amount in " + CURRENCY_UNIT + "\n"
+            "    \"confirmations\" : n         (numeric) The number of confirmations\n"
+            "  }\n"
+            "  ,...\n"
+            "]\n"
+
+            "\nExamples\n"
+            + HelpExampleCli("listprivateunspent", "")
+            + HelpExampleCli("listprivateunspent", "6 9999999")
+        );
+
+    RPCTypeCheck(params, boost::assign::list_of(UniValue::VNUM)(UniValue::VNUM)(UniValue::VARR));
+
+    int nMinDepth = 1;
+    if (params.size() > 0)
+        nMinDepth = params[0].get_int();
+
+    int nMaxDepth = 9999999;
+    if (params.size() > 1)
+        nMaxDepth = params[1].get_int();
+
+    UniValue results(UniValue::VARR);
+    vector<COutput> vecOutputs;
+    assert(pwalletMain != NULL);
+    LOCK2(cs_main, pwalletMain->cs_wallet);
+    pwalletMain->AvailablePrivateCoins(vecOutputs, false, NULL, true);
+    BOOST_FOREACH(const COutput& out, vecOutputs) {
+        if (out.nDepth < nMinDepth || out.nDepth > nMaxDepth)
+            continue;
+        UniValue entry(UniValue::VOBJ);
+        entry.push_back(Pair("txid", out.tx->GetHash().GetHex()));
+        entry.push_back(Pair("vout", out.i));
+        entry.push_back(Pair("amount", ValueFromAmount(out.tx->vAmounts[out.i])));
+        entry.push_back(Pair("confirmations", out.nDepth));
+        results.push_back(entry);
+    }
+
+    return results;
+}
+
 UniValue fundrawtransaction(const UniValue& params, bool fHelp)
 {
     if (!EnsureWalletIsAvailable(fHelp))
@@ -3282,6 +3396,26 @@ UniValue resolveopenalias(const UniValue& params, bool fHelp)
       result.push_back(Pair("address",""));
   else
       result.push_back(Pair("address",addresses.front()));
+
+  return result;
+}
+
+UniValue witnesserstats(const UniValue& params, bool fHelp)
+{
+  UniValue result(UniValue::VARR);
+
+  if (!EnsureWalletIsAvailable(fHelp))
+      return NullUniValue;
+
+  for (std::pair<const CBigNum, PublicMintWitnessData>& it: pwalletMain->mapWitness)
+  {
+      UniValue entry(UniValue::VOBJ);
+      entry.push_back(Pair("mint", it.second.GetPublicCoin().getValue().ToString(16).substr(0,32)));
+      entry.push_back(Pair("txout", it.second.GetChainData().GetOutpoint().ToString()));
+      entry.push_back(Pair("count", it.second.GetCount()));
+
+      result.push_back(entry);
+  }
 
   return result;
 }
@@ -3712,6 +3846,7 @@ static const CRPCCommand commands[] =
     { "wallet",             "listsinceblock",           &listsinceblock,           false },
     { "wallet",             "listtransactions",         &listtransactions,         false },
     { "wallet",             "listunspent",              &listunspent,              false },
+    { "wallet",             "listprivateunspent",       &listprivateunspent,       false },
     { "wallet",             "lockunspent",              &lockunspent,              true  },
     { "wallet",             "move",                     &movecmd,                  false },
     { "wallet",             "sendfrom",                 &sendfrom,                 false },
@@ -3734,6 +3869,7 @@ static const CRPCCommand commands[] =
     { "wallet",             "walletpassphrase",         &walletpassphrase,         true  },
     { "wallet",             "removeprunedfunds",        &removeprunedfunds,        true  },
     { "wallet",             "resolveopenalias",         &resolveopenalias,         true  },
+    { "wallet",             "witnesserstats",           &witnesserstats,           true  },
     { "pool",               "newpooladdress",           &newPoolAddress,           true  },
     { "pool",               "poolproposalvote",         &poolProposalVote,         true  },
     { "pool",               "poolpaymentrequestvote",   &poolPaymentRequestVote,   true  },
