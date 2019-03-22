@@ -43,6 +43,7 @@ const char* GetTxnOutputType(txnouttype t)
     case TX_WITNESS_V0_SCRIPTHASH: return "witness_v0_scripthash";
     case TX_COLDSTAKING: return "cold_staking";
     case TX_ZEROCOIN: return "private_transaction";
+    case TX_POOL: return "pool_staking";
     }
     return NULL;
 }
@@ -142,6 +143,12 @@ bool Solver(const CScript& scriptPubKey, txnouttype& typeRet, vector<vector<unsi
         typeRet = TX_PAYMENTREQUESTNOVOTE;
         vector<unsigned char> hashBytes(scriptPubKey.begin()+5, scriptPubKey.begin()+37);
         vSolutionsRet.push_back(hashBytes);
+        return true;
+    }
+
+    if(scriptPubKey.IsPool())
+    {
+        typeRet = TX_POOL;
         return true;
     }
 

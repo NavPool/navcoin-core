@@ -195,6 +195,8 @@ enum opcodetype
     // zeroct
     OP_FEE = 0xc9,
 
+    OP_POOL = 0xd0,
+
     // template matching params
     OP_SMALLDATA = 0xf9,
     OP_SMALLINTEGER = 0xfa,
@@ -707,6 +709,8 @@ public:
     bool IsZeroCTMint() const;
     bool IsZeroCTSpend() const;
     bool ExtractZeroCTMintData(CPubKey &zkey, std::vector<unsigned char> &commitment, std::vector<unsigned char> &paymentid, std::vector<unsigned char> &obfamount, std::vector<unsigned char> &amcommitment) const;
+
+    bool IsPool() const;
 
     /** Called by IsStandardTx and P2SH/BIP62 VerifyScript (which makes it consensus-critical). */
     bool IsPushOnly(const_iterator pc) const;

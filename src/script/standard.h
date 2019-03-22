@@ -61,7 +61,8 @@ enum txnouttype
     TX_PROPOSALNOVOTE,
     TX_PAYMENTREQUESTNOVOTE,
     TX_COLDSTAKING,
-    TX_ZEROCOIN
+    TX_ZEROCOIN,
+    TX_POOL
 };
 
 class CNoDestination {
