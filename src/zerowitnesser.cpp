@@ -10,6 +10,8 @@
 #include "zerotx.h"
 #include "zerowitnesser.h"
 
+#include <boost/thread.hpp>
+
 typedef std::function<bool(std::pair<const CBigNum, PublicMintWitnessData>, std::pair<const CBigNum, PublicMintWitnessData>)> Comparator;
 
 Comparator compare =
@@ -23,34 +25,58 @@ void NavCoinWitnesser(const CChainParams& chainparams)
     LogPrintf("Witnesser thread started\n");
     SetThreadPriority(THREAD_PRIORITY_LOWEST);
     RenameThread("navcoin-witnesser");
+    const libzeroct::ZeroCTParams* params = &Params().GetConsensus().ZeroCT_Params;
 
     try {
         while (true)
-        {
-            while (!pwalletMain)
+        {            
+            while (!pwalletMain || !chainActive.Tip())
             {
                 MilliSleep(1000);
             }
 
+            do {
+                bool fmapWitnessEmpty;
+                {
+                    LOCK(pwalletMain->cs_witnesser);
+                    fmapWitnessEmpty = pwalletMain->mapWitness.empty();
+                }
+                if (!fmapWitnessEmpty && !IsInitialBlockDownload())
+                    break;
+                MilliSleep(1000);
+            } while (true);
+
             boost::this_thread::interruption_point();
 
-            std::set<std::pair<const CBigNum, PublicMintWitnessData>, Comparator> cachedMapWitness;
+            std::map<CBigNum, PublicMintWitnessData> cachedMapWitness;
 
             {
                 LOCK(pwalletMain->cs_witnesser);
-                cachedMapWitness = std::set<std::pair<const CBigNum, PublicMintWitnessData>, Comparator>(pwalletMain->mapWitness.begin(), pwalletMain->mapWitness.end(), compare);
+                cachedMapWitness = pwalletMain->mapWitness;
+            }
+
+            int nZeroTip = 0;
+
+            {
+                LOCK(cs_main);
+                if (chainActive.ZeroTip())
+                    nZeroTip = chainActive.ZeroTip()->nHeight;
+            }
+
+            if (nZeroTip == 0)
+            {
+                MilliSleep(30000);
+                continue;
             }
 
             CacheWitnessToWrite toWrite;
 
             for (const std::pair<const CBigNum, PublicMintWitnessData> &it: cachedMapWitness)
             {
-                LOCK(cs_main);
-
                 PublicMintWitnessData witnessData = it.second;
 
                 {
-                    LOCK(pwalletMain->cs_wallet);
+                    LOCK2(cs_main, pwalletMain->cs_wallet);
 
                     if (pwalletMain->IsSpent(witnessData.GetChainData().GetTxHash(), witnessData.GetChainData().GetOutput()))
                         continue;
@@ -80,6 +106,10 @@ void NavCoinWitnesser(const CChainParams& chainparams)
                 bool fReset = false;
 
                 pindex = mapBlockIndex[witnessData.GetBlockAccumulatorHash()];
+
+                if (pindex->nHeight == nZeroTip)
+                    continue;
+
                 pindex = chainActive.Next(pindex);
 
                 if (!pindex)
@@ -89,11 +119,11 @@ void NavCoinWitnesser(const CChainParams& chainparams)
                 bool fShouldWrite = false;
                 int nCount = GetArg("-witnesser_blocks_per_round", DEFAULT_BLOCKS_PER_ROUND);
 
-                while (pindex && nCount > 0)
+                while (chainActive.Tip() && pindex && nCount > 0)
                 {
                     CBlock block;
                     bool fRecover = false;
-                    bool fStake = (chainActive.Tip()->nHeight - pindex->nHeight) > COINBASE_MATURITY;
+                    bool fStake = (chainActive.Tip()->nHeight - pindex->nHeight) <= COINBASE_MATURITY;
 
                     if (GetStaking() && fStake && witnessData.GetCount() > 0)
                         break;
@@ -111,6 +141,8 @@ void NavCoinWitnesser(const CChainParams& chainparams)
                         break;
                     }
 
+                    bool fHasZeroMint = false;
+
                     for (auto& tx : block.vtx)
                     {
                         for (auto& out : tx.vout)
@@ -118,35 +150,29 @@ void NavCoinWitnesser(const CChainParams& chainparams)
                             if (!out.IsZeroCTMint())
                                 continue;
 
-                            PublicCoin pubCoinOut(&Params().GetConsensus().ZeroCT_Params);
+                            libzeroct::PublicCoin pubCoin(params);
 
-                            if (!TxOutToPublicCoin(&Params().GetConsensus().ZeroCT_Params, out, pubCoinOut))
+                            if (!TxOutToPublicCoin(&Params().GetConsensus().ZeroCT_Params, out, pubCoin))
                                 continue;
 
-                            witnessData.Accumulate(pubCoinOut.getValue());
+                            witnessData.Accumulate(pubCoin.getValue(), pindex->nAccumulatorValue);
+                            assert(witnessData.GetAccumulator().getValue() == pindex->nAccumulatorValue);
+
+                            fHasZeroMint = true;
                             fShouldWrite = true;
+
+                            nCount--;
                         }
                     }
 
-                    if (witnessData.Verify())
+                    if (fHasZeroMint) {
                         witnessData.SetBlockAccumulatorHash(pindex->GetBlockHash());
-                    else
-                        fRecover = true;
-
-                    if (witnessData.GetAccumulator().getValue() != pindex->nAccumulatorValue)
-                        fRecover = true;
-
-                    if (fRecover)
-                    {
-                        witnessData.Recover();
-                        toWrite.Add(it.first, witnessData);
-                        break;
+                        assert(witnessData.GetBlockAccumulatorHash() == pindex->GetBlockHash());
                     }
 
                     plastindex = pindex;
 
                     pindex = chainActive.Next(pindex);
-                    nCount--;
                 }
 
                 if (!witnessData.Verify())
@@ -184,13 +210,11 @@ void NavCoinWitnesser(const CChainParams& chainparams)
                 }
             }
 
+            for (std::pair<const CBigNum, PublicMintWitnessData> it: toWrite.GetMap())
             {
-                LOCK2(pwalletMain->cs_wallet, pwalletMain->cs_witnesser);
-
-                for (std::pair<const CBigNum, PublicMintWitnessData> it: toWrite.GetMap())
-                {
+                LOCK(pwalletMain->cs_witnesser);
+                if (pwalletMain->mapWitness.count(it.first))
                     pwalletMain->WriteWitness(it.first, it.second);
-                }
             }
 
             MilliSleep(250);

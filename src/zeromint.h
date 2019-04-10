@@ -34,7 +34,7 @@ public:
     }
 
     bool IsNull() const {
-        return outPoint.IsNull() && blockHash == 0;
+        return outPoint.IsNull() || blockHash == uint256(0);
     }
 
     void SetNull() const {
@@ -65,10 +65,10 @@ public:
     WitnessData(const libzeroct::ZeroCTParams* paramsIn) :
                 accumulator(&paramsIn->accumulatorParams), accumulatorWitness(paramsIn) {}
 
-    WitnessData(const libzeroct::ZeroCTParams* paramsIn, libzeroct::PublicCoin pubCoinIn,
+    WitnessData(const libzeroct::ZeroCTParams* paramsIn, libzeroct::PrivateCoin privCoinIn,
                 libzeroct::Accumulator accumulatorIn, uint256 blockAccumulatorHashIn) :
                 accumulator(paramsIn, accumulatorIn.getValue()),
-                accumulatorWitness(paramsIn, accumulatorIn, pubCoinIn),
+                accumulatorWitness(paramsIn, accumulatorIn, privCoinIn.getPublicCoin()),
                 blockAccumulatorHash(blockAccumulatorHashIn), nCount(0) {}
 
     WitnessData(libzeroct::Accumulator accumulatorIn,
@@ -103,8 +103,21 @@ public:
         nCount++;
     }
 
+    void Accumulate(CBigNum coinValue, CBigNum accumulatorValue) {
+        accumulator.setValue(accumulatorValue);
+        accumulatorWitness.AddElement(coinValue);
+        nCount++;
+    }
+
     int GetCount() const {
         return nCount;
+    }
+
+    bool operator==(const WitnessData& wd) const {
+        return (accumulator.getValue() == wd.GetAccumulator().getValue() &&
+                accumulatorWitness.getValue() == wd.GetAccumulatorWitness().getValue() &&
+                blockAccumulatorHash == wd.GetBlockAccumulatorHash() &&
+                nCount == wd.GetCount());
     }
 
     ADD_SERIALIZE_METHODS;
@@ -130,25 +143,29 @@ class PublicMintWitnessData
 public:
     template <typename Stream>
     PublicMintWitnessData(const libzeroct::ZeroCTParams* p, Stream& strm) :
-                          params(p), pubCoin(p), currentData(p), prevData(p), initialData(p)
+                          params(p), privCoin(p), currentData(p), prevData(p), initialData(p)
     {
         strm >> *this;
     }
 
-    PublicMintWitnessData(const libzeroct::ZeroCTParams* paramsIn, const libzeroct::PublicCoin pubCoinIn,
+    PublicMintWitnessData(const libzeroct::ZeroCTParams* paramsIn, const libzeroct::PrivateCoin privCoinIn,
                           const PublicMintChainData chainDataIn, libzeroct::Accumulator accumulatorIn,
                           uint256 blockAccumulatorHashIn) :
-                          params(paramsIn), pubCoin(pubCoinIn), chainData(chainDataIn),
-                          currentData(paramsIn, pubCoinIn, accumulatorIn, blockAccumulatorHashIn),
-                          prevData(paramsIn, pubCoinIn, accumulatorIn, blockAccumulatorHashIn),
-                          initialData(paramsIn, pubCoinIn, accumulatorIn, blockAccumulatorHashIn) {}
+                          params(paramsIn), privCoin(privCoinIn), chainData(chainDataIn),
+                          currentData(paramsIn, privCoinIn, accumulatorIn, blockAccumulatorHashIn),
+                          prevData(paramsIn, privCoinIn, accumulatorIn, blockAccumulatorHashIn),
+                          initialData(paramsIn, privCoinIn, accumulatorIn, blockAccumulatorHashIn) {}
 
     PublicMintWitnessData(const PublicMintWitnessData& witness) : params(witness.params),
-                          pubCoin(witness.pubCoin), chainData(witness.chainData), currentData(witness.currentData),
+                          privCoin(witness.privCoin), chainData(witness.chainData), currentData(witness.currentData),
                           prevData(witness.prevData), initialData(witness.initialData) { }
 
     void Accumulate(CBigNum coinValue) {
         currentData.Accumulate(coinValue);
+    }
+
+    void Accumulate(CBigNum coinValue, CBigNum accumulatorValue) {
+        currentData.Accumulate(coinValue, accumulatorValue);
     }
 
     void SetBlockAccumulatorHash(uint256 blockAccumulatorHashIn) {
@@ -167,8 +184,12 @@ public:
         currentData = copy;
     }
 
+    bool IsRecovered() const {
+        return (currentData == prevData);
+    }
+
     bool Verify() const {
-        return currentData.GetAccumulatorWitness().VerifyWitness(currentData.GetAccumulator(), pubCoin);
+        return currentData.GetAccumulatorWitness().VerifyWitness(currentData.GetAccumulator(), privCoin.getPublicCoin());
     }
 
     void Reset() const {
@@ -176,6 +197,10 @@ public:
                          initialData.GetBlockAccumulatorHash(), initialData.GetCount());
         currentData = copy;
         prevData = copy;
+    }
+
+    bool IsReset() const {
+        return (initialData == currentData && initialData == prevData);
     }
 
     uint256 GetBlockAccumulatorHash() const {
@@ -186,6 +211,10 @@ public:
         return prevData.GetBlockAccumulatorHash();
     }
 
+    uint256 GetInitialBlockAccumulatorHash() const {
+        return initialData.GetBlockAccumulatorHash();
+    }
+
     libzeroct::Accumulator GetAccumulator() const {
         return currentData.GetAccumulator();
     }
@@ -194,8 +223,12 @@ public:
         return currentData.GetAccumulatorWitness();
     }
 
+    libzeroct::PrivateCoin GetPrivateCoin() const {
+        return privCoin;
+    }
+
     libzeroct::PublicCoin GetPublicCoin() const {
-        return pubCoin;
+        return privCoin.getPublicCoin();
     }
 
     PublicMintChainData GetChainData() const {
@@ -209,7 +242,7 @@ public:
     ADD_SERIALIZE_METHODS;
     template <typename Stream, typename Operation>
     inline void SerializationOp(Stream& s, Operation ser_action, int nType, int nVersion) {
-        READWRITE(pubCoin);
+        READWRITE(privCoin);
         READWRITE(chainData);
         READWRITE(currentData);
         READWRITE(prevData);
@@ -218,7 +251,7 @@ public:
 
 private:
     const libzeroct::ZeroCTParams* params;
-    libzeroct::PublicCoin pubCoin;
+    libzeroct::PrivateCoin privCoin;
     PublicMintChainData chainData;
     mutable WitnessData currentData;
     mutable WitnessData prevData;

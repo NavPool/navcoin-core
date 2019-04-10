@@ -666,6 +666,7 @@ public:
     std::string strWalletFile;
 
     std::set<int64_t> setKeyPool;
+    std::set<int64_t> setZeroKeyPool;
     std::map<CKeyID, CKeyMetadata> mapKeyMetadata;
 
     typedef std::map<unsigned int, CMasterKey> MasterKeyMap;
@@ -733,6 +734,7 @@ public:
     bool WriteSerial(const CBigNum& bnSerialNumber, COutPoint& out);
 
     bool WriteWitness(const CBigNum& bnSerialNumber, PublicMintWitnessData& witness);
+    bool EraseWitness(const CBigNum& bnSerialNumber);
 
     const CWalletTx* GetWalletTx(const uint256& hash) const;
 
@@ -770,7 +772,7 @@ public:
      * keystore implementation
      * Generate a new key
      */
-    CPubKey GenerateNewKey();
+    CPubKey GenerateNewKey(const uint32_t nType = 0);
     //! Adds a key to the store, and saves it to disk.
     bool AddKeyPubKey(const CKey& key, const CPubKey &pubkey);
     //! Adds a key to the store, without saving it to disk (used by LoadWallet)
@@ -870,7 +872,17 @@ public:
     void ReturnKey(int64_t nIndex);
     bool GetKeyFromPool(CPubKey &key);
     int64_t GetOldestKeyPoolTime();
+
+    bool NewZeroKeyPool();
+    bool TopUpZeroKeyPool(unsigned int kpSize = 0);
+    void ReserveKeyFromZeroKeyPool(int64_t& nIndex, CKeyPool& keypool);
+    void KeepKeyZero(int64_t nIndex);
+    void ReturnKeyZero(int64_t nIndex);
+    bool GetKeyFromZeroPool(CPubKey &key);
+    int64_t GetOldestZeroKeyPoolTime();
+
     void GetAllReserveKeys(std::set<CKeyID>& setAddress) const;
+    void GetAllReserveZeroKeys(std::set<CKeyID>& setAddress) const;
 
     std::set< std::set<CTxDestination> > GetAddressGroupings();
     std::map<CTxDestination, CAmount> GetAddressBalances();

@@ -99,7 +99,9 @@ public:
         consensus.nStakeMinAge = 60 * 60 * 2;	// minimum for coin age: 2 hours
         consensus.nTargetSpacing = 30; // Blocktime: 30 secs
         consensus.nStakeCombineThreshold = 1000 * COIN;
+        consensus.nZeroStakeCombineThreshold = 10000 * COIN;
         consensus.nStakeSplitThreshold = 2 * consensus.nStakeCombineThreshold;
+        consensus.nZeroStakeSplitThreshold = 2 * consensus.nZeroStakeCombineThreshold;
         consensus.nDailyBlockCount =  (24 * 60 * 60) / consensus.nTargetSpacing;
         consensus.nModifierInterval = 10 * 60; // time to elapse before new modifier is computed
         consensus.nTargetTimespan = 25 * 30;
@@ -311,7 +313,9 @@ public:
         consensus.nStakeMinAge = 2;	// minimum for coin age: 2 seconds
         consensus.nTargetSpacing = 30; // Blocktime: 30 secs
         consensus.nStakeCombineThreshold = 1000 * COIN;
+        consensus.nZeroStakeCombineThreshold = 10000 * COIN;
         consensus.nStakeSplitThreshold = 2 * consensus.nStakeCombineThreshold;
+        consensus.nZeroStakeSplitThreshold = 2 * consensus.nZeroStakeCombineThreshold;
         consensus.nDailyBlockCount =  (24 * 60 * 60) / consensus.nTargetSpacing;
         consensus.nModifierInterval = 10 * 60; // time to elapse before new modifier is computed
         consensus.nTargetTimespan = 25 * 30;
@@ -504,7 +508,9 @@ public:
         consensus.nStakeMinAge = 2;	// minimum for coin age: 2 seconds
         consensus.nTargetSpacing = 30; // Blocktime: 30 secs
         consensus.nStakeCombineThreshold = 1000 * COIN;
+        consensus.nZeroStakeCombineThreshold = 10000 * COIN;
         consensus.nStakeSplitThreshold = 2 * consensus.nStakeCombineThreshold;
+        consensus.nZeroStakeSplitThreshold = 2 * consensus.nZeroStakeCombineThreshold;
         consensus.nDailyBlockCount =  (24 * 60 * 60) / consensus.nTargetSpacing;
         consensus.nModifierInterval = 10 * 60; // time to elapse before new modifier is computed
         consensus.nTargetTimespan = 25 * 30;
@@ -706,7 +712,9 @@ public:
         consensus.nStakeMinAge = 2;	// minimum for coin age: 2 seconds
         consensus.nTargetSpacing = 30; // Blocktime: 30 secs
         consensus.nStakeCombineThreshold = 1000 * COIN;
+        consensus.nZeroStakeCombineThreshold = 10000 * COIN;
         consensus.nStakeSplitThreshold = 2 * consensus.nStakeCombineThreshold;
+        consensus.nZeroStakeSplitThreshold = 2 * consensus.nZeroStakeCombineThreshold;
         consensus.nDailyBlockCount =  (24 * 60 * 60) / consensus.nTargetSpacing;
         consensus.nModifierInterval = 10 * 60; // time to elapse before new modifier is computed
         consensus.nTargetTimespan = 25 * 30;
