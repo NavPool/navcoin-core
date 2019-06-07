@@ -518,7 +518,7 @@ struct sortByCoinAgeDescending
 {
     inline bool operator() (const COutput& cOutput1, const COutput& cOutput2)
     {
-        return (cOutput1.tx->nTime > cOutput2.tx->nTime);
+        return (cOutput1.tx->nTime < cOutput2.tx->nTime);
     }
 };
 
