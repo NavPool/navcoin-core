@@ -140,13 +140,9 @@ void RemoveConfigFile(std::string key);
 bool ExistsKeyInConfigFile(std::string key);
 
 boost::filesystem::path GetPoolDir();
-boost::filesystem::path GetPoolAccountDir();
-boost::filesystem::path GetPoolCFundDir();
-boost::filesystem::path PoolGetAccountFile(std::string spendingAddress);
 boost::filesystem::path PoolGetCFundFile(std::string stakingAddress);
-bool PoolExistsAccountFile(std::string spendingAddress);
 bool PoolExistsCFundFile(std::string stakingAddress);
-void PoolInitAccount(std::string spendingAddress, std::string stakingAddress, std::string coldStakingAddress);
+void PoolInitAccount(std::string addressUuid, std::string spendingAddress, std::string stakingAddress, std::string coldStakingAddress);
 std::string PoolReadFile(boost::filesystem::path poolFile, std::string strKey);
 void PoolWriteFile(boost::filesystem::path poolFile, std::string key, std::string value);
 void PoolRemoveFile(boost::filesystem::path poolFile, std::string key, std::string value);

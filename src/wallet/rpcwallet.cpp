@@ -3414,12 +3414,10 @@ UniValue poolProposalVoteList(const UniValue& params, bool fHelp) {
 
     if (fHelp || params.size() != 1)
         throw runtime_error(
-                "poolproposalvotelist \"spending_address\"\n"
+                "poolproposalvotelist \"staking_address\"\n"
                 "\nArguments:\n"
-                "1. \"spending_address\" (string, required) The spending address\n"
-
+                "1. \"staking_address\" (string, required) The staking address\n"
                 "\nReturns a list containing the addresses current voting status for all active proposals.\n"
-
                 "\nResult:\n"
                 "{\n"
                 "      \"yes\":   List of proposals this wallet is casting a 'yes' vote for.\n"
@@ -3434,18 +3432,14 @@ UniValue poolProposalVoteList(const UniValue& params, bool fHelp) {
     UniValue novotes(UniValue::VARR);
     UniValue nullvotes(UniValue::VARR);
 
-    CNavCoinAddress spendingAddress(params[0].get_str());
-    if (!spendingAddress.IsValid()) {
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid spending address");
-    }
-
-    if (!PoolExistsAccountFile(spendingAddress.ToString())) {
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, string("The spending address is not registered ") + spendingAddress.ToString());
+    CNavCoinAddress stakingAddress(params[0].get_str());
+    if (!stakingAddress.IsValid()) {
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid staking address");
     }
 
     std::vector<std::pair<std::string, bool>> votes;
 
-    PoolVoteProposalList(spendingAddress.ToString(), votes);
+    PoolVoteProposalList(stakingAddress.ToString(), votes);
 
     for (unsigned int i = 0; i < votes.size(); i++) {
         CFund::CProposal proposal;
@@ -3571,9 +3565,9 @@ UniValue poolPaymentRequestVoteList(const UniValue& params, bool fHelp) {
 
     if (fHelp || params.size() != 1)
         throw runtime_error(
-                "poolpaymentrequestvotelist \"spending_address\"\n"
+                "poolpaymentrequestvotelist \"staking_address\"\n"
                 "\nArguments:\n"
-                "1. \"spending_address\" (string, required) The spending address\n"
+                "1. \"staking_address\" (string, required) The staking address\n"
 
                 "\nReturns a list containing the addresses current voting status for all active payment requests.\n"
 
@@ -3591,18 +3585,18 @@ UniValue poolPaymentRequestVoteList(const UniValue& params, bool fHelp) {
     UniValue novotes(UniValue::VARR);
     UniValue nullvotes(UniValue::VARR);
 
-    CNavCoinAddress spendingAddress(params[0].get_str());
-    if (!spendingAddress.IsValid()) {
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid spending address");
+    CNavCoinAddress stakingAddress(params[0].get_str());
+    if (!stakingAddress.IsValid()) {
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid staking address");
     }
 
-    if (!PoolExistsAccountFile(spendingAddress.ToString())) {
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, string("The spending address is not registered ") + spendingAddress.ToString());
+    if (!PoolExistsCFundFile(stakingAddress.ToString())) {
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, string("The staking address is not registered ") + stakingAddress.ToString());
     }
 
     std::vector<std::pair<std::string, bool>> votes;
 
-    PoolVotePaymentRequestList(spendingAddress.ToString(), votes);
+    PoolVotePaymentRequestList(stakingAddress.ToString(), votes);
 
     for (unsigned int i = 0; i < votes.size(); i++) {
         CFund::CPaymentRequest prequest;
@@ -3674,10 +3668,10 @@ UniValue paymentrequestvote(const UniValue& params, bool fHelp)
 
 }
 
-UniValue newPoolAddress(const UniValue& params, bool fHelp) {
+UniValue createPoolAddress(const UniValue& params, bool fHelp) {
     if (fHelp || params.size() != 1)
         throw runtime_error(
-                "newpooladdress \"spending_address\"\n"
+                "createPoolAddress \"spending_address\"\n"
                 "\nCreate a new pooled address associated with the spending address\n"
                 "\nArguments:\n"
                 "1. \"spending_address\" (string, required) The spending address\n"
@@ -3691,16 +3685,6 @@ UniValue newPoolAddress(const UniValue& params, bool fHelp) {
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid spending address");
     }
 
-    if (PoolExistsAccountFile(spendingAddress.ToString())) {
-        boost::filesystem::path accountFile = PoolGetAccountFile(spendingAddress.ToString());
-        UniValue result(UniValue::VOBJ);
-        result.push_back(Pair("stakingAddress", PoolReadFile(accountFile, "stakingAddress")));
-        result.push_back(Pair("spendingAddress", spendingAddress.ToString()));
-        result.push_back(Pair("coldStakingAddress", PoolReadFile(accountFile, "coldStakingAddress")));
-
-        return result;
-    }
-
     if (!pwalletMain->IsLocked()) {
         pwalletMain->TopUpKeyPool();
     }
@@ -3709,6 +3693,7 @@ UniValue newPoolAddress(const UniValue& params, bool fHelp) {
     if (!pwalletMain->GetKeyFromPool(newKey)) {
         throw JSONRPCError(RPC_WALLET_KEYPOOL_RAN_OUT, "Error: Keypool ran out, please call keypoolrefill first");
     }
+
     CKeyID stakingKeyID = newKey.GetID();
 
     pwalletMain->SetAddressBook(stakingKeyID, "", "staking");
@@ -3719,8 +3704,6 @@ UniValue newPoolAddress(const UniValue& params, bool fHelp) {
     spendingAddress.GetKeyID(spendingKeyID);
 
     CNavCoinAddress coldStakingAddress(stakingKeyID, spendingKeyID);
-
-    PoolInitAccount(spendingAddress.ToString(), stakingAddress.ToString(), coldStakingAddress.ToString());
 
     UniValue result(UniValue::VOBJ);
     result.push_back(Pair("stakingAddress", stakingAddress.ToString()));
@@ -3738,20 +3721,19 @@ UniValue poolProposalVote(const UniValue& params, bool fHelp)
     }
     if (fHelp || params.size() > 3 || (command != "yes" && command != "no" && command != "remove"))
         throw runtime_error(
-                "poolproposalvote \"spending_address\" \"proposal_hash\" \"yes|no|remove\"\n"
+                "poolproposalvote \"staking_address\" \"proposal_hash\" \"yes|no|remove\"\n"
                 "\nAdds a pool proposal to the list of votes.\n"
                 "\nArguments:\n"
-                "1. \"spending_address\" (string, required) The spending address\n"
+                "1. \"staking_address_address\" (string, required) The staking address\n"
                 "2. \"proposal_hash\"    (string, required) The proposal hash\n"
                 "3. \"vote\"             (string, required) 'yes' to vote yes, 'no' to vote no,\n"
                 "                        'remove' to remove a proposal from the list\n"
         );
 
-    string spendingAddress = params[0].get_str();
+    string stakingAddress = params[0].get_str();
     string proposalHash = params[1].get_str();
-    string strMessage  = spendingAddress + proposalHash + command;
 
-    CNavCoinAddress addr(spendingAddress);
+    CNavCoinAddress addr(stakingAddress);
     if (!addr.IsValid()) {
         throw JSONRPCError(RPC_TYPE_ERROR, "Invalid address");
     }
@@ -3760,13 +3742,6 @@ UniValue poolProposalVote(const UniValue& params, bool fHelp)
     if (!addr.GetKeyID(keyID)) {
         throw JSONRPCError(RPC_TYPE_ERROR, "Address does not refer to key");
     }
-
-    if (PoolExistsAccountFile(spendingAddress) == false) {
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Spending address not recognised");
-    }
-
-    boost::filesystem::path accountFile = PoolGetAccountFile(spendingAddress);
-    std::string stakingAddress = PoolReadFile(accountFile, "stakingAddress");
 
     if (command == "yes") {
         CFund::PoolVoteProposal(stakingAddress, proposalHash, true);
@@ -3794,20 +3769,19 @@ UniValue poolPaymentRequestVote(const UniValue& params, bool fHelp)
     }
     if (fHelp || params.size() > 3 || (command != "yes" && command != "no" && command != "remove"))
         throw runtime_error(
-                "poolpaymentrequestvote \"spending_address\" \"payment_hash\" \"yes|no|remove\"\n"
+                "poolpaymentrequestvote \"staking_address\" \"payment_hash\" \"yes|no|remove\"\n"
                 "\nAdds a pool payment request to the list of votes.\n"
                 "\nArguments:\n"
-                "1. \"spending_address\" (string, required) The spending address\n"
+                "1. \"staking_address\" (string, required) The staking address\n"
                 "2. \"payment_hash\"     (string, required) The payment request hash\n"
                 "3. \"vote\"             (string, required) 'yes' to vote yes, 'no' to vote no,\n"
                 "                        'remove' to remove a proposal from the list\n"
         );
 
-    string spendingAddress = params[0].get_str();
+    string stakingAddress = params[0].get_str();
     string paymentRequestHash = params[1].get_str();
-    string strMessage  = spendingAddress + paymentRequestHash + command;
 
-    CNavCoinAddress addr(spendingAddress);
+    CNavCoinAddress addr(stakingAddress);
     if (!addr.IsValid()) {
         throw JSONRPCError(RPC_TYPE_ERROR, "Invalid address");
     }
@@ -3816,13 +3790,6 @@ UniValue poolPaymentRequestVote(const UniValue& params, bool fHelp)
     if (!addr.GetKeyID(keyID)) {
         throw JSONRPCError(RPC_TYPE_ERROR, "Address does not refer to key");
     }
-
-    if (PoolExistsAccountFile(spendingAddress) == false) {
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Spending address not recognised");
-    }
-
-    boost::filesystem::path accountFile = PoolGetAccountFile(spendingAddress);
-    std::string stakingAddress = PoolReadFile(accountFile, "stakingAddress");
 
     if (command == "yes") {
         CFund::PoolVotePaymentRequest(stakingAddress, paymentRequestHash, true);
@@ -3917,7 +3884,7 @@ static const CRPCCommand commands[] =
     { "wallet",             "walletpassphrase",         &walletpassphrase,         true  },
     { "wallet",             "removeprunedfunds",        &removeprunedfunds,        true  },
     { "wallet",             "resolveopenalias",         &resolveopenalias,         true  },
-    { "pool",               "newpooladdress",           &newPoolAddress,           true  },
+    { "pool",               "createpooladdress",        &createPoolAddress,        true  },
     { "pool",               "poolproposalvote",         &poolProposalVote,         true  },
     { "pool",               "poolproposalvotelist",     &poolProposalVoteList,     true  },
     { "pool",               "poolpaymentrequestvote",   &poolPaymentRequestVote,   true  },
