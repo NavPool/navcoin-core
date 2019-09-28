@@ -3536,7 +3536,7 @@ UniValue poolProposalVoteList(const UniValue& params, bool fHelp) {
     if(pcoinsTip->GetAllProposals(mapProposals)) {
         for (unsigned int i = 0; i < votes.size(); i++) {
             CFund::CProposal proposal;
-            if (pcoinsTip->GetProposal(votes[i].first, proposal) && proposal.CanVote()) {
+            if (pcoinsTip->GetProposal(uint256S(votes[i].first), proposal) && proposal.CanVote()) {
                 if (votes[i].second == true)
                     yesvotes.push_back(votes[i].first);
                 else if (votes[i].second == false)
@@ -3720,7 +3720,7 @@ UniValue poolPaymentRequestVoteList(const UniValue& params, bool fHelp) {
         for (unsigned int i = 0; i < votes.size(); i++) {
             CFund::CPaymentRequest prequest;
 
-            if (!pcoinsTip->GetPaymentRequest(votes[i].first, prequest) && prequest.CanVote(*pcoinsTip)) {
+            if (!pcoinsTip->GetPaymentRequest(uint256S(votes[i].first), prequest) && prequest.CanVote(*pcoinsTip)) {
                 if (votes[i].second == true)
                     yesvotes.push_back(votes[i].first);
                 else if (votes[i].second == false)
