@@ -3536,7 +3536,7 @@ UniValue poolProposalVoteList(const UniValue& params, bool fHelp) {
     if(pcoinsTip->GetAllProposals(mapProposals)) {
         for (unsigned int i = 0; i < votes.size(); i++) {
             CFund::CProposal proposal;
-            if (pcoinsTip->GetProposal(it->first, proposal) && proposal.CanVote()) {
+            if (pcoinsTip->GetProposal(votes[i].first, proposal) && proposal.CanVote()) {
                 if (votes[i].second == true)
                     yesvotes.push_back(votes[i].first);
                 else if (votes[i].second == false)
@@ -3714,16 +3714,20 @@ UniValue poolPaymentRequestVoteList(const UniValue& params, bool fHelp) {
 
     PoolVotePaymentRequestList(spendingAddress.ToString(), votes);
 
-    for (unsigned int i = 0; i < votes.size(); i++) {
-        CFund::CPaymentRequest prequest;
-        if (CFund::FindPaymentRequest(votes[i].first, prequest) && prequest.CanVote(*pcoinsTip)) {
-            if (votes[i].second == true)
-                yesvotes.push_back(votes[i].first);
-            else if (votes[i].second == false)
-                novotes.push_back(votes[i].first);
+    CPaymentRequestMap mapPaymentRequests;
+
+    if(pcoinsTip->GetAllPaymentRequests(mapPaymentRequests)) {
+        for (unsigned int i = 0; i < votes.size(); i++) {
+            CFund::CPaymentRequest prequest;
+
+            if (!pcoinsTip->GetPaymentRequest(votes[i].first, prequest) && prequest.CanVote(*pcoinsTip)) {
+                if (votes[i].second == true)
+                    yesvotes.push_back(votes[i].first);
+                else if (votes[i].second == false)
+                    novotes.push_back(votes[i].first);
+            }
         }
     }
-
 
     ret.pushKV("yes",yesvotes);
     ret.pushKV("no",novotes);
