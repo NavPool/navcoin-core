@@ -3531,18 +3531,22 @@ UniValue poolProposalVoteList(const UniValue& params, bool fHelp) {
 
     PoolVoteProposalList(spendingAddress.ToString(), votes);
 
-    for (unsigned int i = 0; i < votes.size(); i++) {
-        CFund::CProposal proposal;
-        if (CFund::FindProposal(votes[i].first, proposal) && proposal.CanVote()) {
-            if (votes[i].second == true)
-                yesvotes.push_back(votes[i].first);
-            else if (votes[i].second == false)
-                novotes.push_back(votes[i].first);
+    CProposalMap mapProposals;
+
+    if(pcoinsTip->GetAllProposals(mapProposals)) {
+        for (unsigned int i = 0; i < votes.size(); i++) {
+            CFund::CProposal proposal;
+            if (pcoinsTip->GetProposal(it->first, proposal) && proposal.CanVote()) {
+                if (votes[i].second == true)
+                    yesvotes.push_back(votes[i].first);
+                else if (votes[i].second == false)
+                    novotes.push_back(votes[i].first);
+            }
         }
     }
 
-    ret.push_back(Pair("yes", yesvotes));
-    ret.push_back(Pair("no", novotes));
+    ret.push_back(std::make_pair("yes", yesvotes));
+    ret.push_back(std::make_pair("no", novotes));
 
     return ret;
 }
@@ -3720,8 +3724,8 @@ UniValue poolPaymentRequestVoteList(const UniValue& params, bool fHelp) {
         }
     }
 
-    ret.push_back(Pair("yes", yesvotes));
-    ret.push_back(Pair("no", novotes));
+    ret.push_back(std::make_pair("yes", yesvotes));
+    ret.push_back(std::make_pair("no", novotes));
 
     return ret;
 }
@@ -3807,9 +3811,9 @@ UniValue newPoolAddress(const UniValue& params, bool fHelp) {
     if (PoolExistsAccountFile(spendingAddress.ToString())) {
         boost::filesystem::path accountFile = PoolGetAccountFile(spendingAddress.ToString());
         UniValue result(UniValue::VOBJ);
-        result.push_back(Pair("stakingAddress", PoolReadFile(accountFile, "stakingAddress")));
-        result.push_back(Pair("spendingAddress", spendingAddress.ToString()));
-        result.push_back(Pair("coldStakingAddress", PoolReadFile(accountFile, "coldStakingAddress")));
+        result.push_back(std::make_pair("stakingAddress", PoolReadFile(accountFile, "stakingAddress")));
+        result.push_back(std::make_pair("spendingAddress", spendingAddress.ToString()));
+        result.push_back(std::make_pair("coldStakingAddress", PoolReadFile(accountFile, "coldStakingAddress")));
 
         return result;
     }
@@ -3836,9 +3840,9 @@ UniValue newPoolAddress(const UniValue& params, bool fHelp) {
     PoolInitAccount(spendingAddress.ToString(), stakingAddress.ToString(), coldStakingAddress.ToString());
 
     UniValue result(UniValue::VOBJ);
-    result.push_back(Pair("stakingAddress", stakingAddress.ToString()));
-    result.push_back(Pair("spendingAddress", spendingAddress.ToString()));
-    result.push_back(Pair("coldStakingAddress", coldStakingAddress.ToString()));
+    result.push_back(std::make_pair("stakingAddress", stakingAddress.ToString()));
+    result.push_back(std::make_pair("spendingAddress", spendingAddress.ToString()));
+    result.push_back(std::make_pair("coldStakingAddress", coldStakingAddress.ToString()));
 
     return result;
 }
