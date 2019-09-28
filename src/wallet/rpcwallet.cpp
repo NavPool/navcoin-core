@@ -3545,8 +3545,8 @@ UniValue poolProposalVoteList(const UniValue& params, bool fHelp) {
         }
     }
 
-    ret.push_back(std::make_pair("yes", yesvotes));
-    ret.push_back(std::make_pair("no", novotes));
+    ret.pushKV("yes",yesvotes);
+    ret.pushKV("no",novotes);
 
     return ret;
 }
@@ -3724,8 +3724,9 @@ UniValue poolPaymentRequestVoteList(const UniValue& params, bool fHelp) {
         }
     }
 
-    ret.push_back(std::make_pair("yes", yesvotes));
-    ret.push_back(std::make_pair("no", novotes));
+
+    ret.pushKV("yes",yesvotes);
+    ret.pushKV("no",novotes);
 
     return ret;
 }
@@ -3811,9 +3812,9 @@ UniValue newPoolAddress(const UniValue& params, bool fHelp) {
     if (PoolExistsAccountFile(spendingAddress.ToString())) {
         boost::filesystem::path accountFile = PoolGetAccountFile(spendingAddress.ToString());
         UniValue result(UniValue::VOBJ);
-        result.push_back(std::make_pair("stakingAddress", PoolReadFile(accountFile, "stakingAddress")));
-        result.push_back(std::make_pair("spendingAddress", spendingAddress.ToString()));
-        result.push_back(std::make_pair("coldStakingAddress", PoolReadFile(accountFile, "coldStakingAddress")));
+        result.pushKV("stakingAddress",PoolReadFile(accountFile, "stakingAddress"));
+        result.pushKV("spendingAddress",spendingAddress.ToString());
+        result.pushKV("coldStakingAddress",PoolReadFile(accountFile, "coldStakingAddress"));
 
         return result;
     }
@@ -3840,9 +3841,9 @@ UniValue newPoolAddress(const UniValue& params, bool fHelp) {
     PoolInitAccount(spendingAddress.ToString(), stakingAddress.ToString(), coldStakingAddress.ToString());
 
     UniValue result(UniValue::VOBJ);
-    result.push_back(std::make_pair("stakingAddress", stakingAddress.ToString()));
-    result.push_back(std::make_pair("spendingAddress", spendingAddress.ToString()));
-    result.push_back(std::make_pair("coldStakingAddress", coldStakingAddress.ToString()));
+    result.pushKV("stakingAddress",stakingAddress.ToString());
+    result.pushKV("stakingAddress",spendingAddress.ToString());
+    result.pushKV("stakingAddress",coldStakingAddress.ToString());
 
     return result;
 }
