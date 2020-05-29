@@ -174,8 +174,7 @@ void PoolInitAccount(std::string spendingAddress, std::string stakingAddress, st
 std::string PoolReadFile(boost::filesystem::path poolFile, std::string strKey);
 void PoolWriteFile(boost::filesystem::path poolFile, std::string key, std::string value);
 void PoolRemoveFile(boost::filesystem::path poolFile, std::string key, std::string value);
-void PoolUpdateProposalVotes(std::string stakingAddress);
-void PoolUpdatePaymentRequestVotes(std::string stakingAddress);
+void PoolUpdateVotes(std::string stakingAddress);
 void PoolVoteProposalList(std::string strAddress, std::vector<std::pair<std::string, bool>> &votes);
 void PoolVotePaymentRequestList(std::string strAddress, std::vector<std::pair<std::string, bool>> &votes);
 

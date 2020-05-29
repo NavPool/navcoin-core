@@ -125,6 +125,34 @@ bool Support(uint256 hash, bool &duplicate)
     return true;
 }
 
+void PoolVoteProposal(string stakingAddress, string strProp, bool vote) {
+    boost::filesystem::path cFundFile = PoolGetCFundFile(stakingAddress);
+    PoolRemoveFile(cFundFile, "addproposalvoteyes", strProp);
+    PoolRemoveFile(cFundFile, "addproposalvoteno", strProp);
+    PoolWriteFile(cFundFile, vote ? "addproposalvoteyes" : "addproposalvoteno", strProp);
+}
+
+void PoolRemoveVoteProposal(string stakingAddress, string strProp)
+{
+    boost::filesystem::path cFundFile = PoolGetCFundFile(stakingAddress);
+    PoolRemoveFile(cFundFile, "addproposalvoteyes", strProp);
+    PoolRemoveFile(cFundFile, "addproposalvoteno", strProp);
+}
+
+void PoolVotePaymentRequest(string stakingAddress, string strProp, bool vote) {
+    boost::filesystem::path cFundFile = PoolGetCFundFile(stakingAddress);
+    PoolRemoveFile(cFundFile, "addpaymentrequestvoteyes", strProp);
+    PoolRemoveFile(cFundFile, "addpaymentrequestvoteno", strProp);
+    PoolWriteFile(cFundFile, vote ? "addpaymentrequestvoteyes" : "addpaymentrequestvoteno", strProp);
+}
+
+void PoolRemoveVotePaymentRequest(string stakingAddress, string strProp)
+{
+    boost::filesystem::path cFundFile = PoolGetCFundFile(stakingAddress);
+    PoolRemoveFile(cFundFile, "addpaymentrequestvoteyes", strProp);
+    PoolRemoveFile(cFundFile, "addpaymentrequestvoteno", strProp);
+}
+
 bool Vote(uint256 hash, int64_t vote, bool &duplicate)
 {
     AssertLockHeld(cs_main);

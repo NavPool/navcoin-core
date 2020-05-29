@@ -3848,6 +3848,7 @@ UniValue poolProposalVoteList(const UniValue& params, bool fHelp) {
     UniValue ret(UniValue::VOBJ);
     UniValue yesvotes(UniValue::VARR);
     UniValue novotes(UniValue::VARR);
+    UniValue absvotes(UniValue::VARR);
     UniValue nullvotes(UniValue::VARR);
 
     CNavCoinAddress spendingAddress(params[0].get_str());
@@ -3864,21 +3865,41 @@ UniValue poolProposalVoteList(const UniValue& params, bool fHelp) {
     PoolVoteProposalList(spendingAddress.ToString(), votes);
 
     CProposalMap mapProposals;
+    CStateViewCache view(pcoinsTip);
 
-    if(pcoinsTip->GetAllProposals(mapProposals)) {
-        for (unsigned int i = 0; i < votes.size(); i++) {
-            CFund::CProposal proposal;
-            if (pcoinsTip->GetProposal(uint256S(votes[i].first), proposal) && proposal.CanVote()) {
-                if (votes[i].second == true)
-                    yesvotes.push_back(votes[i].first);
-                else if (votes[i].second == false)
-                    novotes.push_back(votes[i].first);
-            }
+    if(view.GetAllProposals(mapProposals))
+    {
+        for (CProposalMap::iterator it_ = mapProposals.begin(); it_ != mapProposals.end(); it_++)
+        {
+            CProposal proposal;
+
+            if (!view.GetProposal(it_->first, proposal))
+                continue;
+
+            if (proposal.GetLastState() != DAOFlags::NIL)
+                continue;
+
+            auto it = mapAddedVotes.find(proposal.hash);
+
+            UniValue p(UniValue::VOBJ);
+            proposal.ToJson(p, view);
+            if (it != mapAddedVotes.end()) {
+                if (it->second == 1)
+                    yesvotes.push_back(p);
+                else if (it->second == -1)
+                    absvotes.push_back(p);
+                else if (it->second == 0)
+                    novotes.push_back(p);
+            } else
+                nullvotes.push_back(p);
+
         }
     }
 
     ret.pushKV("yes",yesvotes);
     ret.pushKV("no",novotes);
+    ret.pushKV("abs",absvotes);
+    ret.pushKV("null",nullvotes);
 
     return ret;
 }
@@ -4338,6 +4359,7 @@ UniValue poolPaymentRequestVoteList(const UniValue& params, bool fHelp) {
     UniValue ret(UniValue::VOBJ);
     UniValue yesvotes(UniValue::VARR);
     UniValue novotes(UniValue::VARR);
+    UniValue absvotes(UniValue::VARR);
     UniValue nullvotes(UniValue::VARR);
 
     CNavCoinAddress spendingAddress(params[0].get_str());
@@ -4354,22 +4376,42 @@ UniValue poolPaymentRequestVoteList(const UniValue& params, bool fHelp) {
     PoolVotePaymentRequestList(spendingAddress.ToString(), votes);
 
     CPaymentRequestMap mapPaymentRequests;
+    CStateViewCache view(pcoinsTip);
 
-    if(pcoinsTip->GetAllPaymentRequests(mapPaymentRequests)) {
-        for (unsigned int i = 0; i < votes.size(); i++) {
-            CFund::CPaymentRequest prequest;
+    if(view.GetAllPaymentRequests(mapPaymentRequests))
+    {
+        for (CPaymentRequestMap::iterator it_ = mapPaymentRequests.begin(); it_ != mapPaymentRequests.end(); it_++)
+        {
+            CPaymentRequest prequest;
 
-            if (!pcoinsTip->GetPaymentRequest(uint256S(votes[i].first), prequest) && prequest.CanVote(*pcoinsTip)) {
-                if (votes[i].second == true)
-                    yesvotes.push_back(votes[i].first);
-                else if (votes[i].second == false)
-                    novotes.push_back(votes[i].first);
-            }
+            if (!view.GetPaymentRequest(it_->first, prequest))
+                continue;
+
+            if (prequest.GetLastState() != DAOFlags::NIL)
+                continue;
+
+            auto it = mapAddedVotes.find(prequest.hash);
+
+            UniValue p(UniValue::VOBJ);
+            prequest.ToJson(p, view);
+
+            if (it != mapAddedVotes.end())
+            {
+                if (it->second == 1)
+                    yesvotes.push_back(p);
+                else if (it->second == -1)
+                    absvotes.push_back(p);
+                else if (it->second == 0)
+                    novotes.push_back(p);
+            } else
+                nullvotes.push_back(p);
         }
     }
 
     ret.pushKV("yes",yesvotes);
     ret.pushKV("no",novotes);
+    ret.pushKV("abs",absvotes);
+    ret.pushKV("null",nullvotes);
 
     return ret;
 }
@@ -4618,17 +4660,17 @@ UniValue poolProposalVote(const UniValue& params, bool fHelp)
     std::string stakingAddress = PoolReadFile(accountFile, "stakingAddress");
 
     if (command == "yes") {
-        CFund::PoolVoteProposal(stakingAddress, proposalHash, true);
+        PoolVoteProposal(stakingAddress, proposalHash, true);
         return NullUniValue;
     }
 
     if (command == "no") {
-        CFund::PoolVoteProposal(stakingAddress, proposalHash, false);
+        PoolVoteProposal(stakingAddress, proposalHash, false);
         return NullUniValue;
     }
 
     if (command == "remove") {
-        CFund::PoolRemoveVoteProposal(stakingAddress, proposalHash);
+        PoolRemoveVoteProposal(stakingAddress, proposalHash);
         return NullUniValue;
     }
 
@@ -4674,17 +4716,17 @@ UniValue poolPaymentRequestVote(const UniValue& params, bool fHelp)
     std::string stakingAddress = PoolReadFile(accountFile, "stakingAddress");
 
     if (command == "yes") {
-        CFund::PoolVotePaymentRequest(stakingAddress, paymentRequestHash, true);
+        PoolVotePaymentRequest(stakingAddress, paymentRequestHash, true);
         return NullUniValue;
     }
 
     if (command == "no") {
-        CFund::PoolVotePaymentRequest(stakingAddress, paymentRequestHash, false);
+        PoolVotePaymentRequest(stakingAddress, paymentRequestHash, false);
         return NullUniValue;
     }
 
     if (command == "remove") {
-        CFund::PoolRemoveVotePaymentRequest(stakingAddress, paymentRequestHash);
+        PoolRemoveVotePaymentRequest(stakingAddress, paymentRequestHash);
         return NullUniValue;
     }
 

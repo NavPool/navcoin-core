@@ -904,36 +904,56 @@ std::string PoolReadFile(boost::filesystem::path poolFile, std::string strKey)
     throw;
 }
 
-void PoolUpdateProposalVotes(std::string stakingAddress)
+void PoolUpdateVotes(std::string stakingAddress)
 {
-    vAddedProposalVotes.clear();
+    mapAddedVotes.clear();
 
     boost::filesystem::ifstream streamConfig(PoolGetCFundFile(stakingAddress));
-    if (streamConfig.good()) {
-        set <string> setOptions;
-        setOptions.insert("*");
+    if (!streamConfig.good())
+        return; // No navcoin.conf file is OK
 
-        for (boost::program_options::detail::config_file_iterator it(streamConfig, setOptions), end; it != end; ++it) {
-            if (it->string_key == "addproposalvoteyes" || it->string_key == "addproposalvoteno") {
-                vAddedProposalVotes.push_back(make_pair(it->value[0], it->string_key == "addproposalvoteyes"));
-            }
+    set <string> setOptions;
+    setOptions.insert("*");
+
+    for (boost::program_options::detail::config_file_iterator it(streamConfig, setOptions), end; it != end; ++it)
+    {
+        // Don't overwrite existing settings so command line settings override navcoin.conf
+        string strKey = string("-") + it->string_key;
+        string strValue = it->value[0];
+
+        if(strKey == "-addproposalvoteyes" || strKey == "-addpaymentrequestvoteyes" || strKey == "-voteyes")
+        {
+            mapAddedVotes[uint256S(strValue)]=1;
+            continue;
         }
-    }
-}
 
-void PoolUpdatePaymentRequestVotes(std::string stakingAddress)
-{
-    vAddedPaymentRequestVotes.clear();
+        else if(strKey == "-addproposalvoteno" || strKey == "-addpaymentrequestvoteno" || strKey == "-voteno")
+        {
+            mapAddedVotes[uint256S(strValue)]=0;
+            continue;
+        }
 
-    boost::filesystem::ifstream streamConfig(PoolGetCFundFile(stakingAddress));
-    if (streamConfig.good()) {
-        set<string> setOptions;
-        setOptions.insert("*");
+        else if(strKey == "-addproposalvoteabs" || strKey == "-addpaymentrequestvotabs" || strKey == "-voteabs")
+        {
+            mapAddedVotes[uint256S(strValue)]=-1;
+            continue;
+        }
 
-        for (boost::program_options::detail::config_file_iterator it(streamConfig, setOptions), end; it != end; ++it) {
-            if (it->string_key == "addpaymentrequestvoteyes" || it->string_key == "addpaymentrequestvoteno") {
-                vAddedPaymentRequestVotes.push_back(make_pair(it->value[0], it->string_key == "addpaymentrequestvoteyes"));
-            }
+        else if(strKey == "-support")
+        {
+            mapSupported[uint256S(strValue)]=true;
+        }
+
+        else if(strKey == "-vote" && strValue.find("~") != std::string::npos)
+        {
+            std::string sHash = strValue.substr(0, strValue.find("~"));
+            std::string sVote = strValue.substr(strValue.find("~")+1, strValue.size());
+            mapAddedVotes[uint256S(sHash)]=stoull(sVote);
+        }
+
+        else if(strKey == "-stakervote")
+        {
+            mapArgs[strKey] = strValue;
         }
     }
 }

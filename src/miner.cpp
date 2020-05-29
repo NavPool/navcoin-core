@@ -1026,7 +1026,7 @@ void NavCoinStaker(const CChainParams& chainparams)
             //     ::GetSerializeSize(*pblock, SER_NETWORK, PROTOCOL_VERSION));
 
             //Trying to sign a block
-            if (SignBlock(pblock, *pwalletMain, nFees, chainparams, sLog))
+            if (SignBlock(pblock, *pwalletMain, nFees, chainparams))
             {
                 LogPrint("coinstake", "PoS Block signed\n");
                 SetThreadPriority(THREAD_PRIORITY_NORMAL);
@@ -1051,7 +1051,7 @@ void NavCoinStaker(const CChainParams& chainparams)
     }
 }
 
-bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParams& chainparams, std::string sLog)
+bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParams& chainparams)
 {
   std::vector<CTransaction> vtx = pblock->vtx;
   // if we are trying to sign
@@ -1094,12 +1094,10 @@ bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParam
           pblock->vtx[0].vout[pblock->vtx[0].vout.size()-1].scriptPubKey[1] = OP_POOL;
           pblock->vtx[0].vout[pblock->vtx[0].vout.size()-1].nValue = 0;
 
-          ApplyCommunityFundToCoinBase(pblock->vtx[0], chainparams, key);
+          CBlockIndex* pindexPrev = chainActive.Tip();
+          ApplyCommunityFundToCoinBase(pblock->vtx[0], chainparams, key, pindexPrev);
           if (txCoinStake.nTime >= chainActive.Tip()->GetPastTimeLimit()+1)
           {
-              if (sLog != "")
-                  LogPrintf("%s", sLog);
-
               // make sure coinstake would meet timestamp protocol
               //    as it would be the same as the block timestamp
               pblock->vtx[0].nTime = pblock->nTime = txCoinStake.nTime;
@@ -1389,55 +1387,69 @@ bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParam
   return false;
 }
 
-void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& chainparams, CKey key) {
+void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& chainparams, CKey key, CBlockIndex* pindexPrev) {
     string stakingAddress = CNavCoinAddress(key.GetPubKey().GetID()).ToString();
     LogPrintf("Staking address: %s\n", stakingAddress);
 
-    PoolUpdateProposalVotes(stakingAddress);
-    PoolUpdatePaymentRequestVotes(stakingAddress);
+    PoolUpdateVotes(stakingAddress);
 
-    CBlockIndex* pindexPrev = chainActive.Tip();
-    CCoinsViewCache view(pcoinsTip);
+    std::map<uint256, bool> votes;
+    CStateViewCache coins(pcoinsTip);
 
-    if(IsCommunityFundEnabled(pindexPrev, chainparams.GetConsensus()))
+    bool fDAOConsultations = IsDAOEnabled(pindexPrev, chainparams.GetConsensus());
+    bool fCFund = IsCommunityFundEnabled(pindexPrev, chainparams.GetConsensus());
+
+    if(fDAOConsultations)
     {
-        std::map<uint256, bool> votes;
-        for (unsigned int i = 0; i < vAddedProposalVotes.size(); i++)
+
+    }
+
+    if(fCFund)
+    {
+        CProposal proposal;
+        CPaymentRequest prequest;
+        CConsultation consultation;
+        CConsultationAnswer answer;
+
+        for (auto& it: mapAddedVotes)
         {
-            CFund::CProposal proposal;
-            bool vote = vAddedProposalVotes[i].second;
-            if(view.GetProposal(uint256S(vAddedProposalVotes[i].first), proposal))
+            int64_t vote = it.second;
+
+            if (!fDAOConsultations && vote == VoteFlags::VOTE_ABSTAIN)
+                continue;
+
+            if (votes.count(it.first) != 0)
+                continue;
+
+            if(coins.GetProposal(it.first, proposal))
             {
-                if(proposal.CanVote() && votes.count(proposal.hash) == 0)
+                if(proposal.CanVote(coins))
                 {
                     coinbaseTx.vout.resize(coinbaseTx.vout.size()+1);
-                    CFund::SetScriptForProposalVote(coinbaseTx.vout[coinbaseTx.vout.size()-1].scriptPubKey,proposal.hash, vote);
+                    SetScriptForProposalVote(coinbaseTx.vout[coinbaseTx.vout.size()-1].scriptPubKey,proposal.hash, vote);
                     coinbaseTx.vout[coinbaseTx.vout.size()-1].nValue = 0;
                     votes[proposal.hash] = vote;
+
+                    continue;
                 }
             }
-        }
-
-
-        for (unsigned int i = 0; i < vAddedPaymentRequestVotes.size(); i++)
-        {
-            CFund::CPaymentRequest prequest; CFund::CProposal proposal;
-            bool vote = vAddedPaymentRequestVotes[i].second;
-            if(view.GetPaymentRequest(uint256S(vAddedPaymentRequestVotes[i].first), prequest))
+            else if(coins.GetPaymentRequest(it.first, prequest))
             {
-                if(!view.GetProposal(prequest.proposalhash, proposal))
+                if(!coins.GetProposal(prequest.proposalhash, proposal))
                     continue;
-                CBlockIndex* pblockindex = proposal.GetLastStateBlockIndexForState(CFund::ACCEPTED);
+                CBlockIndex* pblockindex = proposal.GetLastStateBlockIndexForState(DAOFlags::ACCEPTED);
                 if(pblockindex == nullptr)
                     continue;
-                if((proposal.CanRequestPayments() || proposal.GetLastState() == CFund::PENDING_VOTING_PREQ)
-                        && prequest.CanVote(view) && votes.count(prequest.hash) == 0 &&
-                        pindexPrev->nHeight - pblockindex->nHeight > Params().GetConsensus().nCommunityFundMinAge)
+                if((proposal.CanRequestPayments() || proposal.GetLastState() == DAOFlags::PENDING_VOTING_PREQ)
+                   && prequest.CanVote(coins) && votes.count(prequest.hash) == 0 &&
+                   pindexPrev->nHeight - pblockindex->nHeight > Params().GetConsensus().nCommunityFundMinAge)
                 {
                     coinbaseTx.vout.resize(coinbaseTx.vout.size()+1);
-                    CFund::SetScriptForPaymentRequestVote(coinbaseTx.vout[coinbaseTx.vout.size()-1].scriptPubKey,prequest.hash, vote);
+                    SetScriptForPaymentRequestVote(coinbaseTx.vout[coinbaseTx.vout.size()-1].scriptPubKey,prequest.hash, vote);
                     coinbaseTx.vout[coinbaseTx.vout.size()-1].nValue = 0;
                     votes[prequest.hash] = vote;
+
+                    continue;
                 }
             }
         }
@@ -1445,29 +1457,34 @@ void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& 
         UniValue strDZeel(UniValue::VARR);
         CPaymentRequestMap mapPaymentRequests;
 
-        if(view.GetAllPaymentRequests(mapPaymentRequests))
+        if(coins.GetAllPaymentRequests(mapPaymentRequests))
         {
             for (CPaymentRequestMap::iterator it_ = mapPaymentRequests.begin(); it_ != mapPaymentRequests.end(); it_++)
             {
-                CFund::CPaymentRequest prequest;
+                CPaymentRequest prequest;
 
-                if (!view.GetPaymentRequest(it_->first, prequest))
+                if (!coins.GetPaymentRequest(it_->first, prequest))
                     continue;
-                CBlockIndex* pblockindex = prequest.GetLastStateBlockIndexForState(CFund::ACCEPTED);
+                CBlockIndex* pblockindex = prequest.GetLastStateBlockIndexForState(DAOFlags::ACCEPTED);
                 if(pblockindex == nullptr)
                     continue;
+
                 if(prequest.hash == uint256())
                     continue;
-                if(prequest.GetLastState() == CFund::ACCEPTED &&
+
+                if(prequest.GetLastState() == DAOFlags::ACCEPTED &&
                         pindexPrev->nHeight - pblockindex->nHeight > Params().GetConsensus().nCommunityFundMinAge) {
-                    CFund::CProposal proposal;
-                    if(view.GetProposal(prequest.proposalhash, proposal)) {
-                        CNavCoinAddress addr(proposal.Address);
+                    CProposal proposal;
+                    if(coins.GetProposal(prequest.proposalhash, proposal)) {
+                        CNavCoinAddress addr(proposal.GetPaymentAddress());
+
                         if (!addr.IsValid())
                             continue;
+
                         coinbaseTx.vout.resize(coinbaseTx.vout.size()+1);
                         coinbaseTx.vout[coinbaseTx.vout.size()-1].scriptPubKey = GetScriptForDestination(addr.Get());
                         coinbaseTx.vout[coinbaseTx.vout.size()-1].nValue = prequest.nAmount;
+
                         strDZeel.push_back(prequest.hash.ToString());
                     } else {
                         LogPrint("cfund", "Could not find parent proposal of payment request %s.\n", prequest.hash.ToString());
