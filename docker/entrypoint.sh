@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
 cd /data
-touch test
 
 alias yacc="bison"
 
