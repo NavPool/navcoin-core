@@ -3863,37 +3863,21 @@ UniValue poolProposalVoteList(const UniValue& params, bool fHelp) {
     std::vector<std::pair<std::string, bool>> votes;
 
     PoolVoteProposalList(spendingAddress.ToString(), votes);
-
-    CProposalMap mapProposals;
     CStateViewCache view(pcoinsTip);
 
-    if(view.GetAllProposals(mapProposals))
-    {
-        for (CProposalMap::iterator it_ = mapProposals.begin(); it_ != mapProposals.end(); it_++)
-        {
-            CProposal proposal;
+    for (unsigned int i = 0; i < votes.size(); i++) {
+        CProposal proposal;
 
-            if (!view.GetProposal(it_->first, proposal))
-                continue;
+        if (!view.GetProposal(uint256S(votes[i].first), proposal))
+            continue;
 
-            if (proposal.GetLastState() != DAOFlags::NIL)
-                continue;
+        if (proposal.GetLastState() != DAOFlags::NIL)
+            continue;
 
-            auto it = mapAddedVotes.find(proposal.hash);
-
-            UniValue p(UniValue::VOBJ);
-            proposal.ToJson(p, view);
-            if (it != mapAddedVotes.end()) {
-                if (it->second == 1)
-                    yesvotes.push_back(p);
-                else if (it->second == -1)
-                    absvotes.push_back(p);
-                else if (it->second == 0)
-                    novotes.push_back(p);
-            } else
-                nullvotes.push_back(p);
-
-        }
+        if (votes[i].second == true)
+            yesvotes.push_back(votes[i].first);
+        else if (votes[i].second == false)
+            novotes.push_back(votes[i].first);
     }
 
     ret.pushKV("yes",yesvotes);
@@ -4374,38 +4358,21 @@ UniValue poolPaymentRequestVoteList(const UniValue& params, bool fHelp) {
     std::vector<std::pair<std::string, bool>> votes;
 
     PoolVotePaymentRequestList(spendingAddress.ToString(), votes);
-
-    CPaymentRequestMap mapPaymentRequests;
     CStateViewCache view(pcoinsTip);
 
-    if(view.GetAllPaymentRequests(mapPaymentRequests))
-    {
-        for (CPaymentRequestMap::iterator it_ = mapPaymentRequests.begin(); it_ != mapPaymentRequests.end(); it_++)
-        {
-            CPaymentRequest prequest;
+    for (unsigned int i = 0; i < votes.size(); i++) {
+        CProposal prequest;
 
-            if (!view.GetPaymentRequest(it_->first, prequest))
-                continue;
+        if (!view.GetPaymentRequest(uint256S(votes[i].first), prequest))
+            continue;
 
-            if (prequest.GetLastState() != DAOFlags::NIL)
-                continue;
+        if (prequest.GetLastState() != DAOFlags::NIL)
+            continue;
 
-            auto it = mapAddedVotes.find(prequest.hash);
-
-            UniValue p(UniValue::VOBJ);
-            prequest.ToJson(p, view);
-
-            if (it != mapAddedVotes.end())
-            {
-                if (it->second == 1)
-                    yesvotes.push_back(p);
-                else if (it->second == -1)
-                    absvotes.push_back(p);
-                else if (it->second == 0)
-                    novotes.push_back(p);
-            } else
-                nullvotes.push_back(p);
-        }
+        if (votes[i].second == true)
+            yesvotes.push_back(votes[i].first);
+        else if (votes[i].second == false)
+            novotes.push_back(votes[i].first);
     }
 
     ret.pushKV("yes",yesvotes);
