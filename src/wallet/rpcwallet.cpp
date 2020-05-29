@@ -4361,7 +4361,7 @@ UniValue poolPaymentRequestVoteList(const UniValue& params, bool fHelp) {
     CStateViewCache view(pcoinsTip);
 
     for (unsigned int i = 0; i < votes.size(); i++) {
-        CProposal prequest;
+        CPaymentRequest prequest;
 
         if (!view.GetPaymentRequest(uint256S(votes[i].first), prequest))
             continue;
