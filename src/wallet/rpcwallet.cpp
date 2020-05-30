@@ -4364,11 +4364,15 @@ UniValue poolPaymentRequestVoteList(const UniValue& params, bool fHelp) {
         LogPrintf("%s voted %s for %s\n", params[0].get_str(), votes[i].second ? "yes" : "no", votes[i].first);
 
         CPaymentRequest prequest;
-        if (!view.GetPaymentRequest(uint256S(votes[i].first), prequest))
+        if (!view.GetPaymentRequest(uint256S(votes[i].first), prequest)) {
+            LogPrintf("Failed to find payment request %s", votes[i].first);
             continue;
+        }
 
-        if (prequest.GetLastState() != DAOFlags::NIL)
+        if (prequest.GetLastState() != DAOFlags::NIL) {
+            LogPrintf("Payment request 1= DAOFlags::NIL %s", votes[i].first);
             continue;
+        }
 
         if (votes[i].second == true) {
             yesvotes.push_back(votes[i].first);
