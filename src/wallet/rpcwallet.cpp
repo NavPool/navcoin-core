@@ -4361,26 +4361,17 @@ UniValue poolPaymentRequestVoteList(const UniValue& params, bool fHelp) {
     CStateViewCache view(pcoinsTip);
 
     for (unsigned int i = 0; i < votes.size(); i++) {
-        LogPrintf("%s voted %s for %s\n", params[0].get_str(), votes[i].second ? "yes" : "no", votes[i].first);
-
         CPaymentRequest prequest;
-        if (!view.GetPaymentRequest(uint256S(votes[i].first), prequest)) {
-            LogPrintf("Failed to find payment request %s", votes[i].first);
+        if (!view.GetPaymentRequest(uint256S(votes[i].first), prequest))
             continue;
-        }
 
-        if (prequest.GetLastState() != DAOFlags::NIL) {
-            LogPrintf("Payment request 1= DAOFlags::NIL %s", votes[i].first);
+        if (prequest.GetLastState() != DAOFlags::NIL)
             continue;
-        }
 
-        if (votes[i].second == true) {
+        if (votes[i].second == true)
             yesvotes.push_back(votes[i].first);
-            LogPrintf("Adding a yes vote");
-        } else if (votes[i].second == false) {
-            LogPrintf("Adding a no vote");
+        else if (votes[i].second == false)
             novotes.push_back(votes[i].first);
-        }
     }
 
     ret.pushKV("yes",yesvotes);
