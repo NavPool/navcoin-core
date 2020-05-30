@@ -4370,10 +4370,13 @@ UniValue poolPaymentRequestVoteList(const UniValue& params, bool fHelp) {
         if (prequest.GetLastState() != DAOFlags::NIL)
             continue;
 
-        if (votes[i].second == true)
+        if (votes[i].second == true) {
             yesvotes.push_back(votes[i].first);
-        else if (votes[i].second == false)
+            LogPrintf("Adding a yes vote");
+        } else if (votes[i].second == false) {
+            LogPrintf("Adding a no vote");
             novotes.push_back(votes[i].first);
+        }
     }
 
     ret.pushKV("yes",yesvotes);
