@@ -815,9 +815,6 @@ bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParam
           ApplyCommunityFundToCoinBase(pblock->vtx[0], chainparams, key, pindexPrev);
           if (txCoinStake.nTime >= chainActive.Tip()->GetPastTimeLimit()+1)
           {
-              if (sLog != "")
-                  LogPrintf("%s", sLog);
-
               // make sure coinstake would meet timestamp protocol
               //    as it would be the same as the block timestamp
               pblock->vtx[0].nTime = pblock->nTime = txCoinStake.nTime;
