@@ -370,8 +370,6 @@ void NavCoinApplication::loadTheme()
         theme = "light";
     }
 
-    qDebug() << __func__ << ": THEME LOADED: " << settings.value("theme").toString();
-
     // Load the style sheet
     QFile appQss(":/themes/app");
     QFile sharedQss(":/themes/shared");
@@ -434,9 +432,6 @@ bool NavCoinApplication::setupMnemonicWords(std::string& wordlist, std::string& 
     if (GetBoolArg("-skipmnemonicbackup",false)) {
         return true;
     }
-
-    std::string walletFile = GetArg("-wallet", "wallet.dat");
-    if (fs::exists(walletFile)) return true;
 
 	if (CheckIfWalletDatExists()) return true;
 

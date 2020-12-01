@@ -585,6 +585,27 @@ UniValue stakervote(const UniValue& params, bool fHelp)
     return "";
 }
 
+UniValue setexclude(const UniValue& params, bool fHelp)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+                "setexclude bool\n"
+                "\nSets the node blocks to be excluded from votings.\n"
+                "\nArguments:\n"
+                "1. \"bool\"               (bool, required) Whether to turn on or off.\n"
+                + HelpExampleCli("setexclude", "true")
+                );
+
+    if (!params[0].isBool())
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid parameter, argument 1 must be a boolean");
+
+    SoftSetArg("-excludevote", params[0].get_bool() ? "1" : "0", true);
+    RemoveConfigFile("excludevote");
+    WriteConfigFile("excludevote", params[0].get_bool() ? "1" : "0");
+
+    return "";
+}
+
 UniValue createproposal(const UniValue& params, bool fHelp)
 {
     if (!EnsureWalletIsAvailable(fHelp))
@@ -656,6 +677,9 @@ UniValue createproposal(const UniValue& params, bool fHelp)
 
     if (IsDAOEnabled(chainActive.Tip(), Params().GetConsensus()))
         nVersion |= CProposal::ABSTAIN_VOTE_VERSION;
+
+    if (IsExcludeEnabled(chainActive.Tip(), Params().GetConsensus()))
+        nVersion |= CProposal::EXCLUDE_VERSION;
 
     strDZeel.pushKV("n",nReqAmount);
     strDZeel.pushKV("a",ownerAddress);
@@ -788,6 +812,9 @@ UniValue proposeconsensuschange(const UniValue& params, bool fHelp)
     UniValue strDZeel(UniValue::VOBJ);
     uint64_t nVersion = CConsultation::BASE_VERSION | CConsultation::MORE_ANSWERS_VERSION | CConsultation::CONSENSUS_PARAMETER_VERSION;
 
+    if (IsExcludeEnabled(chainActive.Tip(), Params().GetConsensus()))
+        nVersion |= CConsultation::EXCLUDE_VERSION;
+
     UniValue answers(UniValue::VARR);
     answers.push_back(sAnswer);
 
@@ -887,6 +914,9 @@ UniValue createconsultation(const UniValue& params, bool fHelp)
         nVersion &= ~CConsultation::MORE_ANSWERS_VERSION;
     }
 
+    if (IsExcludeEnabled(chainActive.Tip(), Params().GetConsensus()))
+        nVersion |= CConsultation::EXCLUDE_VERSION;
+
     strDZeel.pushKV("q",sQuestion);
     strDZeel.pushKV("m",nMin);
     strDZeel.pushKV("n",nMax);
@@ -973,6 +1003,9 @@ UniValue createconsultationwithanswers(const UniValue& params, bool fHelp)
 
     UniValue strDZeel(UniValue::VOBJ);
     uint64_t nVersion = CConsultation::BASE_VERSION;
+
+    if (IsExcludeEnabled(chainActive.Tip(), Params().GetConsensus()))
+        nVersion |= CConsultation::EXCLUDE_VERSION;
 
     if (fAdmitsAnswers)
         nVersion |= CConsultation::MORE_ANSWERS_VERSION;
@@ -1122,6 +1155,9 @@ UniValue createpaymentrequest(const UniValue& params, bool fHelp)
     if (IsDAOEnabled(chainActive.Tip(), Params().GetConsensus()))
         nVersion |= CPaymentRequest::ABSTAIN_VOTE_VERSION;
 
+    if (IsExcludeEnabled(chainActive.Tip(), Params().GetConsensus()))
+        nVersion |= CPaymentRequest::EXCLUDE_VERSION;
+
     strDZeel.pushKV("h",params[0].get_str());
     strDZeel.pushKV("n",nReqAmount);
     strDZeel.pushKV("s",Signature);
@@ -1222,6 +1258,9 @@ UniValue proposeanswer(const UniValue& params, bool fHelp)
 
     UniValue strDZeel(UniValue::VOBJ);
     uint64_t nVersion = CConsultationAnswer::BASE_VERSION;
+
+    if (IsExcludeEnabled(chainActive.Tip(), Params().GetConsensus()))
+        nVersion |= CConsultationAnswer::EXCLUDE_VERSION;
 
     strDZeel.pushKV("h",params[0].get_str());
     strDZeel.pushKV("a",sAnswer);
@@ -2991,6 +3030,52 @@ UniValue encryptwallet(const UniValue& params, bool fHelp)
     return _("wallet encrypted; NavCoin server stopping, restart to run with encrypted wallet.");
 }
 
+UniValue encrypttxdata(const UniValue& params, bool fHelp)
+{
+    if (!EnsureWalletIsAvailable(fHelp))
+        return NullUniValue;
+
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "encrypttxdata \"passphrase\"\n"
+            "\nEncrypts the wallet database using \"passphrase\", effectively encrypting your\n"
+            "transaction data and addressbook, you can also use this rpc command to change the\n"
+            "encryption \"passphrase\" of an already encrypted wallet database.\n"
+            "Note that this will shutdown the server.\n"
+            "\nArguments:\n"
+            "1. \"passphrase\"    (string) The pass phrase to encrypt the wallet database with. It must be at least 1 character, but should be long.\n"
+            "\nExamples:\n"
+            "\nEncrypt you wallet\n"
+            + HelpExampleCli("encrypttxdata", "\"my pass phrase\"") +
+            "\nAs a json rpc call\n"
+            + HelpExampleRpc("encrypttxdata", "\"my pass phrase\"")
+        );
+
+    LOCK2(cs_main, pwalletMain->cs_wallet);
+
+    if (fHelp)
+        return true;
+
+    // TODO: get rid of this .c_str() by implementing SecureString::operator=(std::string)
+    // Alternately, find a way to make params[0] mlock()'d to begin with.
+    SecureString strWalletPass;
+    strWalletPass.reserve(100);
+    strWalletPass = params[0].get_str().c_str();
+
+    if (strWalletPass.length() < 1)
+        throw runtime_error(
+            "encrypttxdata <passphrase>\n"
+            "Encrypts the txdata with <passphrase>.");
+
+    if (!pwalletMain->EncryptTx(strWalletPass))
+        throw JSONRPCError(RPC_TXDATA_ENCRYPTION_FAILED, "Error: Failed to encrypt the txdata.");
+
+    // Shutdown the wallet so we don't accidentally write unencrypted data
+    // to the wallet.dat file...
+    StartShutdown();
+    return _("txdata encrypted; NavCoin server stopping, restart to run with encrypted txdata.");
+}
+
 UniValue lockunspent(const UniValue& params, bool fHelp)
 {
     if (!EnsureWalletIsAvailable(fHelp))
@@ -3822,70 +3907,6 @@ UniValue proposalvotelist(const UniValue& params, bool fHelp)
                 nullvotes.push_back(p);
 
         }
-    }
-
-    ret.pushKV("yes",yesvotes);
-    ret.pushKV("no",novotes);
-    ret.pushKV("abs",absvotes);
-    ret.pushKV("null",nullvotes);
-
-    return ret;
-}
-
-UniValue poolProposalVoteList(const UniValue& params, bool fHelp) {
-    if (!EnsureWalletIsAvailable(fHelp))
-        return NullUniValue;
-
-    if (fHelp || params.size() != 1)
-        throw runtime_error(
-                "poolproposalvotelist \"spending_address\"\n"
-                "\nArguments:\n"
-                "1. \"spending_address\" (string, required) The spending address\n"
-
-                "\nReturns a list containing the addresses current voting status for all active proposals.\n"
-
-                "\nResult:\n"
-                "{\n"
-                "      \"yes\":   List of proposals this wallet is casting a 'yes' vote for.\n"
-                "      \"no\":    List of proposals this wallet is casting a 'no' vote for.\n"
-                "}\n"
-        );
-
-    LOCK(cs_main);
-
-    UniValue ret(UniValue::VOBJ);
-    UniValue yesvotes(UniValue::VARR);
-    UniValue novotes(UniValue::VARR);
-    UniValue absvotes(UniValue::VARR);
-    UniValue nullvotes(UniValue::VARR);
-
-    CNavCoinAddress spendingAddress(params[0].get_str());
-    if (!spendingAddress.IsValid()) {
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid spending address");
-    }
-
-    if (!PoolExistsAccountFile(spendingAddress.ToString())) {
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, string("The spending address is not registered ") + spendingAddress.ToString());
-    }
-
-    std::vector<std::pair<std::string, bool>> votes;
-
-    PoolVoteProposalList(spendingAddress.ToString(), votes);
-    CStateViewCache view(pcoinsTip);
-
-    for (unsigned int i = 0; i < votes.size(); i++) {
-        CProposal proposal;
-
-        if (!view.GetProposal(uint256S(votes[i].first), proposal))
-            continue;
-
-        if (proposal.GetLastState() != DAOFlags::NIL)
-            continue;
-
-        if (votes[i].second == true)
-            yesvotes.push_back(votes[i].first);
-        else if (votes[i].second == false)
-            novotes.push_back(votes[i].first);
     }
 
     ret.pushKV("yes",yesvotes);
@@ -4733,6 +4754,7 @@ static const CRPCCommand commands[] =
     { "wallet",             "dumpmnemonic",             &dumpmnemonic,             true  },
     { "wallet",             "dumpwallet",               &dumpwallet,               true  },
     { "wallet",             "encryptwallet",            &encryptwallet,            true  },
+    { "wallet",             "encrypttxdata",            &encrypttxdata,            true  },
     { "wallet",             "getaccountaddress",        &getaccountaddress,        true  },
     { "wallet",             "getaccount",               &getaccount,               true  },
     { "wallet",             "getaddressesbyaccount",    &getaddressesbyaccount,    true  },
@@ -4776,6 +4798,7 @@ static const CRPCCommand commands[] =
     { "dao",                "proposeanswer",            &proposeanswer,            false },
     { "dao",                "proposeconsensuschange",   &proposeconsensuschange,   false },
     { "dao",                "getconsensusparameters",   &getconsensusparameters,   false },
+    { "dao",                "setexclude",               &setexclude,               false },
     { "wallet",             "stakervote",               &stakervote,               false },
     { "dao",                "support",                  &support,                  false },
     { "dao",                "supportlist",              &supportlist,              false },

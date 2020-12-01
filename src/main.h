@@ -489,6 +489,9 @@ bool HashOnchainActive(const uint256 &hash);
 bool GetAddressIndex(uint160 addressHash, int type,
                      std::vector<std::pair<CAddressIndexKey, CAmount> > &addressIndex,
                      int start = 0, int end = 0);
+bool GetAddressHistory(uint160 addressHash, uint160 addressHash2,
+                     std::vector<std::pair<CAddressHistoryKey, CAddressHistoryValue> > &addressHistory,
+                     AddressHistoryFilter filter = AddressHistoryFilter::ALL, int start = 0, int end = 0);
 bool GetAddressUnspent(uint160 addressHash, int type,
                        std::vector<std::pair<CAddressUnspentKey, CAddressUnspentValue> > &unspentOutputs);
 
@@ -551,6 +554,8 @@ bool IsReducedCFundQuorumEnabled(const CBlockIndex* pindexPrev, const Consensus:
 bool IsColdStakingEnabled(const CBlockIndex* pindexPrev, const Consensus::Params& params);
 bool IsColdStakingv2Enabled(const CBlockIndex* pindexPrev, const Consensus::Params& params);
 bool IsColdStakingPoolFeeEnabled(const CBlockIndex* pindexPrev, const Consensus::Params& params);
+
+bool IsExcludeEnabled(const CBlockIndex* pindexPrev, const Consensus::Params& params);
 
 /** When there are blocks in the active chain with missing data, rewind the chainstate and remove them from the block index */
 bool RewindBlockIndex(const CChainParams& params);
@@ -666,7 +671,7 @@ bool IsSigHFEnabled(const Consensus::Params &consensus, const CBlockIndex *pinde
 
 bool TxToProposal(std::string strDZeel, uint256 hash, const uint256& blockhash, const CAmount& nProposalFee, CProposal& proposal);
 bool TxToPaymentRequest(std::string strDZeel, uint256 hash, const uint256& blockhash, CPaymentRequest& prequest);
-bool TxToConsultation(std::string strDZeel, uint256 hash, const uint256& blockhash, CConsultation& consultation, std::vector<CConsultationAnswer>& answers);
+bool TxToConsultation(std::string strDZeel, uint256 hash, const uint256& blockhash, CBlockIndex* pindexPrev, CConsultation& consultation, std::vector<CConsultationAnswer>& answers);
 bool TxToConsultationAnswer(std::string strDZeel, uint256 hash, const uint256& blockhash, CConsultationAnswer& answer);
 
 uint64_t GetConsensusParameter(Consensus::ConsensusParamsPos pos, const CStateViewCache& view);

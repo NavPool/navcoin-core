@@ -230,7 +230,7 @@ CBlockTemplate* BlockAssembler::CreateNewBlock(const CScript& scriptPubKeyIn, bo
         UpdateTime(pblock, chainparams.GetConsensus(), pindexPrev);
     pblock->vtx[0].nTime   = pblock->nTime;
     pblock->nBits          = GetNextTargetRequired(pindexPrev, fProofOfStake);
-    pblock->nNonce         = 0;
+    pblock->nNonce         = GetBoolArg("-excludevote", false) ? 1 : 0;
     pblocktemplate->vTxSigOpsCost[0] = WITNESS_SCALE_FACTOR * GetLegacySigOpCount(pblock->vtx[0]);
 
     if (pFees)
@@ -743,7 +743,7 @@ void NavCoinStaker(const CChainParams& chainparams)
             //     ::GetSerializeSize(*pblock, SER_NETWORK, PROTOCOL_VERSION));
 
             //Trying to sign a block
-            if (SignBlock(pblock, *pwalletMain, nFees, chainparams))
+            if (SignBlock(pblock, *pwalletMain, nFees, chainparams, sLog))
             {
                 LogPrint("coinstake", "PoS Block signed\n");
                 SetThreadPriority(THREAD_PRIORITY_NORMAL);
@@ -768,7 +768,7 @@ void NavCoinStaker(const CChainParams& chainparams)
     }
 }
 
-bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParams& chainparams)
+bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParams& chainparams, std::string sLog)
 {
   std::vector<CTransaction> vtx = pblock->vtx;
   // if we are trying to sign
@@ -815,6 +815,9 @@ bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParam
           ApplyCommunityFundToCoinBase(pblock->vtx[0], chainparams, key, pindexPrev);
           if (txCoinStake.nTime >= chainActive.Tip()->GetPastTimeLimit()+1)
           {
+              if (sLog != "")
+                  LogPrintf("%s", sLog);
+
               // make sure coinstake would meet timestamp protocol
               //    as it would be the same as the block timestamp
               pblock->vtx[0].nTime = pblock->nTime = txCoinStake.nTime;
@@ -847,6 +850,69 @@ bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParam
                   CVoteList pVoteList;
                   view.GetCachedVoter(stakerScript, pVoteList);
                   std::map<uint256, int64_t> list = pVoteList.GetList();
+
+                  bool fHasVote = false;
+
+                  for (auto it = pblock->vtx[0].vout.begin(); it != pblock->vtx[0].vout.end();)
+                  {
+                      CTxOut out = *it;
+                      if (out.IsVote() || out.IsSupportVote() || out.IsConsultationVote())
+                      {
+                          fHasVote = true;
+                          break;
+                      }
+                      ++it;
+                  }
+
+                  if (!fHasVote)
+                  {
+                      int lastVote = pVoteList.GetLastVoteHeight();
+                      auto nCycleLength = GetConsensusParameter(Consensus::CONSENSUS_PARAM_VOTING_CYCLE_LENGTH, view);
+
+                      if (chainActive.Tip()->nHeight - lastVote > nCycleLength*10 || chainActive.Tip()->nHeight <= nCycleLength*10)
+                      {
+                          CBlockIndex* pindex = chainActive.Tip();
+                          uint64_t nLastVoteCycle = (lastVote / nCycleLength);
+
+                          int nPreviousCycle = 0;
+                          int nCycles = 0;
+                          bool fFound = false;
+
+                          while (pindex)
+                          {
+                              uint64_t nCurrentCycle = (pindex->nHeight / nCycleLength);
+
+                              if (nCurrentCycle == nLastVoteCycle)
+                              {
+                                  break;
+                              }
+
+                              auto pVotes = GetProposalVotes(pindex->GetBlockHash());
+                              auto prVotes = GetPaymentRequestVotes(pindex->GetBlockHash());
+                              auto supp = GetSupport(pindex->GetBlockHash());
+                              auto cVotes = GetConsultationVotes(pindex->GetBlockHash());
+
+                              if ((pVotes && pVotes->size()) || (prVotes && prVotes->size()) || (supp && supp->size()) || (cVotes && cVotes->size()))
+                                  fFound = true;
+
+                              if (nCurrentCycle != nPreviousCycle)
+                              {
+                                  if (fFound)
+                                      nCycles++;
+                                  if (nCycles >= 10)
+                                  {
+                                      pblock->nNonce = 1;
+                                      break;
+                                  }
+                                  fFound = false;
+                              }
+
+                              nPreviousCycle = nCurrentCycle;
+
+                              pindex = pindex->pprev;
+                          }
+                      }
+                  }
 
                   std::map<uint256, int> mapCountAnswers;
                   std::map<uint256, int> mapCacheMaxAnswers;
@@ -900,6 +966,13 @@ bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParam
                               continue;
                           }
 
+                          if (pblock->nNonce & 1)
+                          {
+                              LogPrint("daoextra", "%s: Removing vote output %s because the staker is excluded from voting\n", __func__, out.ToString());
+                              it = pblock->vtx[0].vout.erase(it);
+                              continue;
+                          }
+
                           uint256 hash;
                           int64_t vote;
                           out.scriptPubKey.ExtractVote(hash, vote);
@@ -921,6 +994,13 @@ bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParam
                           if (fColdStakingv2 && fStakerIsColdStakingv2)
                           {
                               LogPrint("daoextra", "%s: Removing support vote output %s because the staker delegated to a light wallet\n", __func__, out.ToString());
+                              it = pblock->vtx[0].vout.erase(it);
+                              continue;
+                          }
+
+                          if (pblock->nNonce & 1)
+                          {
+                              LogPrint("daoextra", "%s: Removing vote output %s because the staker is excluded from voting\n", __func__, out.ToString());
                               it = pblock->vtx[0].vout.erase(it);
                               continue;
                           }
@@ -947,6 +1027,13 @@ bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParam
                           if (fColdStakingv2 && fStakerIsColdStakingv2)
                           {
                               LogPrint("daoextra", "%s: Removing consultation vote output %s because the staker delegated to a light wallet\n", __func__, out.ToString());
+                              it = pblock->vtx[0].vout.erase(it);
+                              continue;
+                          }
+
+                          if (pblock->nNonce & 1)
+                          {
+                              LogPrint("daoextra", "%s: Removing vote output %s because the staker is excluded from voting\n", __func__, out.ToString());
                               it = pblock->vtx[0].vout.erase(it);
                               continue;
                           }
@@ -997,7 +1084,7 @@ bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParam
                           bool fProposal = view.HaveProposal(hash);
                           bool fPaymentRequest = view.HavePaymentRequest(hash);
 
-                          if (mapAddedVotes.count(hash) == 0 && votes.count(hash) == 0 && (fProposal || fPaymentRequest))
+                          if (mapAddedVotes.count(hash) == 0 && votes.count(hash) == 0 && (fProposal || fPaymentRequest) && !(pblock->nNonce & 1))
                           {
                               pblock->vtx[0].vout.insert(pblock->vtx[0].vout.begin(), CTxOut());
 
@@ -1014,7 +1101,7 @@ bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParam
                           bool fConsultation = view.HaveConsultation(hash) && view.GetConsultation(hash, consultation);
                           bool fAnswer = view.HaveConsultationAnswer(hash) && view.GetConsultationAnswer(hash, answer);
 
-                          if (fConsultation || fAnswer)
+                          if ((fConsultation || fAnswer) && !(pblock->nNonce & 1))
                           {
                               if (val == VoteFlags::SUPPORT && mapSupported.count(hash) == 0 && supports.count(hash) == 0)
                               {
@@ -1110,18 +1197,102 @@ void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& 
 
     PoolUpdateVotes(stakingAddress);
 
+
     std::map<uint256, bool> votes;
     CStateViewCache coins(pcoinsTip);
 
     bool fDAOConsultations = IsDAOEnabled(pindexPrev, chainparams.GetConsensus());
     bool fCFund = IsCommunityFundEnabled(pindexPrev, chainparams.GetConsensus());
 
-    if(fDAOConsultations)
-    {
+//    if(fDAOConsultations && !GetBoolArg("-excludevote", false))
+//    {
+//        CConsultation consultation;
+//        CConsultationAnswer answer;
+//
+//        for (auto& it: mapSupported)
+//        {
+//            if (votes.count(it.first) != 0)
+//                continue;
+//
+//            if (coins.GetConsultation(it.first, consultation))
+//            {
+//                if (consultation.CanBeSupported())
+//                {
+//                    coinbaseTx.vout.resize(coinbaseTx.vout.size()+1);
+//
+//                    SetScriptForConsultationSupport(coinbaseTx.vout[coinbaseTx.vout.size()-1].scriptPubKey,consultation.hash);
+//                    coinbaseTx.vout[coinbaseTx.vout.size()-1].nValue = 0;
+//                    if (LogAcceptCategory("dao")) sLog += strprintf("%s: Adding consultation-support output %s\n", __func__, coinbaseTx.vout[coinbaseTx.vout.size()-1].ToString());
+//                    votes[consultation.hash] = true;
+//
+//                    continue;
+//                }
+//            }
+//            else if (coins.GetConsultationAnswer(it.first, answer))
+//            {
+//                if (answer.CanBeSupported(coins))
+//                {
+//                    coinbaseTx.vout.resize(coinbaseTx.vout.size()+1);
+//
+//                    SetScriptForConsultationSupport(coinbaseTx.vout[coinbaseTx.vout.size()-1].scriptPubKey,answer.hash);
+//                    coinbaseTx.vout[coinbaseTx.vout.size()-1].nValue = 0;
+//                    if (LogAcceptCategory("dao")) sLog += strprintf("%s: Adding consultation-support output %s\n", __func__, coinbaseTx.vout[coinbaseTx.vout.size()-1].ToString());
+//                    votes[answer.hash] = true;
+//
+//                    continue;
+//                }
+//            }
+//        }
+//
+//        std::map<uint256, int> mapCountAnswers;
+//        std::map<uint256, int> mapCacheMaxAnswers;
+//
+//        for (auto& it: mapAddedVotes)
+//        {
+//            int64_t vote = it.second;
+//
+//            if (!fDAOConsultations && vote == VoteFlags::VOTE_ABSTAIN)
+//                continue;
+//
+//            if (votes.count(it.first) != 0)
+//                continue;
+//
+//            if (coins.GetConsultation(it.first, consultation))
+//            {
+//                if (consultation.CanBeVoted(vote) && consultation.IsValidVote(vote))
+//                {
+//                    coinbaseTx.vout.resize(coinbaseTx.vout.size()+1);
+//
+//                    SetScriptForConsultationVote(coinbaseTx.vout[coinbaseTx.vout.size()-1].scriptPubKey,consultation.hash,vote);
+//                    coinbaseTx.vout[coinbaseTx.vout.size()-1].nValue = 0;
+//
+//                    if (LogAcceptCategory("dao")) sLog += strprintf("%s: Adding consultation-vote output %s\n", __func__, coinbaseTx.vout[coinbaseTx.vout.size()-1].ToString());
+//
+//                    votes[consultation.hash] = true;
+//
+//                    continue;
+//                }
+//            }
+//            else if (coins.GetConsultationAnswer(it.first, answer))
+//            {
+//                if (answer.CanBeVoted(coins))
+//                {
+//                    coinbaseTx.vout.resize(coinbaseTx.vout.size()+1);
+//
+//                    SetScriptForConsultationVote(coinbaseTx.vout[coinbaseTx.vout.size()-1].scriptPubKey,answer.hash,-2);
+//                    coinbaseTx.vout[coinbaseTx.vout.size()-1].nValue = 0;
+//
+//                    if (LogAcceptCategory("dao")) sLog += strprintf("%s: Adding consultation-answer-vote output %s\n", __func__, coinbaseTx.vout[coinbaseTx.vout.size()-1].ToString());
+//
+//                    votes[answer.hash] = true;
+//
+//                    continue;
+//                }
+//            }
+//        }
+//    }
 
-    }
-
-    if(fCFund)
+    if(fCFund && !GetBoolArg("-excludevote", false))
     {
         CProposal proposal;
         CPaymentRequest prequest;
@@ -1147,24 +1318,28 @@ void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& 
                     coinbaseTx.vout[coinbaseTx.vout.size()-1].nValue = 0;
                     votes[proposal.hash] = vote;
 
+                    if (LogAcceptCategory("dao")) sLog += strprintf("%s: Adding proposal-vote output %s\n", __func__, coinbaseTx.vout[coinbaseTx.vout.size()-1].ToString());
+
                     continue;
                 }
             }
             else if(coins.GetPaymentRequest(it.first, prequest))
             {
-                if(!coins.GetProposal(prequest.proposalhash, proposal))
+                if(!view.GetProposal(prequest.proposalhash, proposal))
                     continue;
                 CBlockIndex* pblockindex = proposal.GetLastStateBlockIndexForState(DAOFlags::ACCEPTED);
                 if(pblockindex == nullptr)
                     continue;
                 if((proposal.CanRequestPayments() || proposal.GetLastState() == DAOFlags::PENDING_VOTING_PREQ)
-                   && prequest.CanVote(coins) && votes.count(prequest.hash) == 0 &&
-                   pindexPrev->nHeight - pblockindex->nHeight > Params().GetConsensus().nCommunityFundMinAge)
+                        && prequest.CanVote(view) && votes.count(prequest.hash) == 0 &&
+                        pindexPrev->nHeight - pblockindex->nHeight > Params().GetConsensus().nCommunityFundMinAge)
                 {
                     coinbaseTx.vout.resize(coinbaseTx.vout.size()+1);
                     SetScriptForPaymentRequestVote(coinbaseTx.vout[coinbaseTx.vout.size()-1].scriptPubKey,prequest.hash, vote);
                     coinbaseTx.vout[coinbaseTx.vout.size()-1].nValue = 0;
                     votes[prequest.hash] = vote;
+
+                    if (LogAcceptCategory("dao")) sLog += strprintf("%s: Adding payment-request-vote output %s\n", __func__, coinbaseTx.vout[coinbaseTx.vout.size()-1].ToString());
 
                     continue;
                 }
@@ -1174,13 +1349,13 @@ void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& 
         UniValue strDZeel(UniValue::VARR);
         CPaymentRequestMap mapPaymentRequests;
 
-        if(coins.GetAllPaymentRequests(mapPaymentRequests))
+        if(view.GetAllPaymentRequests(mapPaymentRequests))
         {
             for (CPaymentRequestMap::iterator it_ = mapPaymentRequests.begin(); it_ != mapPaymentRequests.end(); it_++)
             {
                 CPaymentRequest prequest;
 
-                if (!coins.GetPaymentRequest(it_->first, prequest))
+                if (!view.GetPaymentRequest(it_->first, prequest))
                     continue;
                 CBlockIndex* pblockindex = prequest.GetLastStateBlockIndexForState(DAOFlags::ACCEPTED);
                 if(pblockindex == nullptr)
@@ -1192,7 +1367,7 @@ void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& 
                 if(prequest.GetLastState() == DAOFlags::ACCEPTED &&
                         pindexPrev->nHeight - pblockindex->nHeight > Params().GetConsensus().nCommunityFundMinAge) {
                     CProposal proposal;
-                    if(coins.GetProposal(prequest.proposalhash, proposal)) {
+                    if(view.GetProposal(prequest.proposalhash, proposal)) {
                         CNavCoinAddress addr(proposal.GetPaymentAddress());
 
                         if (!addr.IsValid())
@@ -1202,10 +1377,12 @@ void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& 
                         coinbaseTx.vout[coinbaseTx.vout.size()-1].scriptPubKey = GetScriptForDestination(addr.Get());
                         coinbaseTx.vout[coinbaseTx.vout.size()-1].nValue = prequest.nAmount;
 
+                        if (LogAcceptCategory("dao")) sLog += strprintf("%s: Adding payment-request-payout output %s\n", __func__, coinbaseTx.vout[coinbaseTx.vout.size()-1].ToString());
+
                         strDZeel.push_back(prequest.hash.ToString());
-                    } else {
-                        LogPrint("cfund", "Could not find parent proposal of payment request %s.\n", prequest.hash.ToString());
                     }
+                    else
+                        if (LogAcceptCategory("dao")) sLog += strprintf("Could not find parent proposal of payment request %s.\n", prequest.hash.ToString());
                 }
             }
         }

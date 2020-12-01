@@ -66,8 +66,6 @@ static const bool DEFAULT_WALLETBROADCAST = true;
 //! if set, all keys will be derived by using BIP32
 static const bool DEFAULT_USE_HD_WALLET = true;
 
-extern const char * DEFAULT_WALLET_DAT;
-
 class CBlockIndex;
 class CCoinControl;
 class COutput;
@@ -731,6 +729,7 @@ public:
 
     bool IsHDEnabled() const;
 
+    bool IsCryptedTx() const;
 
     std::map<uint256, CWalletTx> mapWallet;
     std::list<CAccountingEntry> laccentries;
@@ -820,6 +819,7 @@ public:
     bool Unlock(const SecureString& strWalletPassphrase);
     bool ChangeWalletPassphrase(const SecureString& strOldWalletPassphrase, const SecureString& strNewWalletPassphrase);
     bool EncryptWallet(const SecureString& strWalletPassphrase);
+    bool EncryptTx(const SecureString& password);
 
     void GetKeyBirthTimes(std::map<CKeyID, int64_t> &mapKeyBirth) const;
 

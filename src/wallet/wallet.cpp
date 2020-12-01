@@ -45,7 +45,6 @@ unsigned int nTxConfirmTarget = DEFAULT_TX_CONFIRM_TARGET;
 bool bSpendZeroConfChange = DEFAULT_SPEND_ZEROCONF_CHANGE;
 bool fSendFreeTransactions = DEFAULT_SEND_FREE_TRANSACTIONS;
 
-const char * DEFAULT_WALLET_DAT = "wallet.dat";
 const uint32_t BIP32_HARDENED_KEY_LIMIT = 0x80000000;
 
 int64_t StakeCombineThreshold = 1000 * COIN;
@@ -100,6 +99,11 @@ const CWalletTx* CWallet::GetWalletTx(const uint256& hash) const
 bool CWallet::IsHDEnabled() const
 {
     return !hdChain.masterKeyID.IsNull();
+}
+
+bool CWallet::IsCryptedTx() const
+{
+    return bitdb.IsCrypted();
 }
 
 CPubKey CWallet::GenerateNewKey()
@@ -941,7 +945,25 @@ bool CWallet::Verify()
     if (walletFile != boost::filesystem::basename(walletFile) + boost::filesystem::extension(walletFile))
         return InitError(strprintf(_("Wallet %s resides outside data directory %s"), walletFile, GetDataDir().string()));
 
-    if (!bitdb.Open(GetDataDir()))
+    // PIN for wallet txdata?
+    std::string pin = GetArg("-pin", "");
+
+    // Check if we have the wallet file
+    if (boost::filesystem::exists(GetDataDir() / walletFile)) {
+        // Check if it's encrypted
+        if (BdbEncrypted(boost::filesystem::path(GetDataDir() / walletFile))) {
+            // No pin?
+            if (pin == "") {
+                if (GetBoolArg("-daemon", false)) {
+                    return InitError(strprintf(_("Can't decrypt wallet, please provide pin via -pin=")));
+                }
+
+                pin = uiInterface.AskForPin(_("PIN/PASS:"));
+            }
+        }
+    }
+
+    if (!bitdb.Open(GetDataDir(), pin))
     {
         // try moving the database env out of the way
         boost::filesystem::path pathDatabase = GetDataDir() / "database";
@@ -954,7 +976,7 @@ bool CWallet::Verify()
         }
 
         // try again
-        if (!bitdb.Open(GetDataDir())) {
+        if (!bitdb.Open(GetDataDir(), pin)) {
             // if it still fails, it probably means we can't even create the database env
             return InitError(strprintf(_("Error initializing wallet database environment %s!"), GetDataDir()));
         }
@@ -977,6 +999,10 @@ bool CWallet::Verify()
                                          " your balance or transactions are incorrect you should"
                                          " restore from a backup."),
                 walletFile, "wallet.{timestamp}.bak", GetDataDir()));
+        }
+        // Could not decrypt?
+        if (r == CDBEnv::DECRYPT_FAIL) {
+            return InitError(_("Could not decrypt the wallet database"));
         }
         if (r == CDBEnv::RECOVER_FAIL)
             return InitError(strprintf(_("%s corrupt, salvage failed"), walletFile));
@@ -1153,6 +1179,12 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
     NotifyStatusChanged(this);
 
     return true;
+}
+
+bool CWallet::EncryptTx(const SecureString& password)
+{
+    // Rewrite the database with the new key
+    return CDB::Rewrite(strWalletFile, nullptr, string(password.c_str()));
 }
 
 int64_t CWallet::IncOrderPosNext(CWalletDB *pwalletdb)
@@ -1713,7 +1745,7 @@ CPubKey CWallet::ImportMnemonic(word_list mnemonic, dictionary lang)
 
         // write the key&metadata to the database
         if (!AddKeyPubKey(key, pubkey))
-            throw std::runtime_error("CWallet::GenerateNewKey(): AddKey failed");
+            throw std::runtime_error("CWallet::ImportMnemonic(): AddKey failed");
     }
 
     return pubkey;
@@ -3969,7 +4001,6 @@ std::string CWallet::GetWalletHelpString(bool showDebug)
 
         strUsage += HelpMessageOpt("-dblogsize=<n>", strprintf("Flush wallet database activity from memory to disk log every <n> megabytes (default: %u)", DEFAULT_WALLET_DBLOGSIZE));
         strUsage += HelpMessageOpt("-flushwallet", strprintf("Run a thread to flush wallet periodically (default: %u)", DEFAULT_FLUSHWALLET));
-        strUsage += HelpMessageOpt("-privdb", strprintf("Sets the DB_PRIVATE flag in the wallet db environment (default: %u)", DEFAULT_WALLET_PRIVDB));
     }
 
     return strUsage;
@@ -4086,7 +4117,7 @@ bool CWallet::InitLoadWallet(const std::string& wordlist, const std::string& pas
         walletInstance->SetBestChain(chainActive.GetLocator());
     }
     else if (GetArg("-importmnemonic","") != "") {
-        return InitError(strprintf(_("You are trying to import a new mnemonic but a wallet already exists. Please rename the existing wallet.dat before trying to import again.")));
+        return InitError(strprintf(_("You are trying to import a new mnemonic but a wallet already exists. Please rename the existing %s before trying to import again."), GetArg("-wallet", DEFAULT_WALLET_DAT)));
     }
     else if (mapArgs.count("-usehd")) {
         bool useHD = GetBoolArg("-usehd", DEFAULT_USE_HD_WALLET);

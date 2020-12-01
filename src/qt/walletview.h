@@ -14,6 +14,7 @@
 class NavCoinGUI;
 class ClientModel;
 class OverviewPage;
+class OptionsDialog;
 class DaoPage;
 class PlatformStyle;
 class ReceiveCoinsDialog;
@@ -62,6 +63,7 @@ private:
 
     OverviewPage *overviewPage;
     QWidget *transactionsPage;
+    OptionsDialog *settingsPage;
     ReceiveCoinsDialog *receiveCoinsPage;
     SendCoinsDialog *sendCoinsPage;
     DaoPage *daoPage;
@@ -79,6 +81,8 @@ public Q_SLOTS:
     void gotoOverviewPage();
     /** Switch to history (transactions) page */
     void gotoHistoryPage();
+    /** Switch to settings page */
+    void gotoSettingsPage();
     /** Switch to community fund page */
     void gotoCommunityFundPage();
     /** Switch to receive coins page */
@@ -99,6 +103,8 @@ public Q_SLOTS:
     void processNewTransaction(const QModelIndex& parent, int start, int /*end*/);
     /** Encrypt the wallet */
     void encryptWallet(bool status);
+    /** Encrypt the wallet txdata */
+    void encryptTx();
     /** Backup the wallet */
     void backupWallet();
     /** Change encrypted wallet passphrase */
@@ -113,8 +119,6 @@ public Q_SLOTS:
 
     void splitRewards();
 
-    void splitRewards();
-
     /** Show used sending addresses */
     void usedSendingAddresses();
     /** Show used receiving addresses */
@@ -122,6 +126,9 @@ public Q_SLOTS:
 
     /** Re-emit encryption status signal */
     void updateEncryptionStatus();
+
+    /** Re-emit encryption tx status signal */
+    void updateEncryptionTxStatus();
 
     /** Show progress dialog e.g. for rescan */
     void showProgress(const QString &title, int nProgress);
@@ -141,6 +148,8 @@ Q_SIGNALS:
     void message(const QString &title, const QString &message, unsigned int style);
     /** Encryption status of wallet changed */
     void encryptionStatusChanged(int status);
+    /** Encryption status of txdata changed */
+    void encryptionTxStatusChanged(bool fCrypted);
     /** Notify that a new transaction appeared */
     void incomingTransaction(const QString& date, int unit, const CAmount& amount, const QString& type, const QString& address, const QString& label);
     /** Notify that the out of sync warning icon has been pressed */

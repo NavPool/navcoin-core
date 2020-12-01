@@ -71,6 +71,8 @@ public Q_SLOTS:
     void gotoOverviewPage();
     /** Switch to history (transactions) page */
     void gotoHistoryPage();
+    /** Switch to settings page */
+    void gotoSettingsPage();
     /** Switch to community fund page */
     void gotoCommunityFundPage();
     /** Switch to receive coins page */
@@ -88,6 +90,8 @@ public Q_SLOTS:
 
     /** Encrypt the wallet */
     void encryptWallet(bool status);
+    /** Encrypt the wallet txdata */
+    void encryptTx();
     /** Backup the wallet */
     void backupWallet();
     /** Change encrypted wallet passphrase */
