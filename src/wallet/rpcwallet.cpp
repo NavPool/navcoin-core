@@ -3917,6 +3917,70 @@ UniValue proposalvotelist(const UniValue& params, bool fHelp)
     return ret;
 }
 
+UniValue poolProposalVoteList(const UniValue& params, bool fHelp) {
+    if (!EnsureWalletIsAvailable(fHelp))
+        return NullUniValue;
+
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+                "poolproposalvotelist \"spending_address\"\n"
+                "\nArguments:\n"
+                "1. \"spending_address\" (string, required) The spending address\n"
+
+                "\nReturns a list containing the addresses current voting status for all active proposals.\n"
+
+                "\nResult:\n"
+                "{\n"
+                "      \"yes\":   List of proposals this wallet is casting a 'yes' vote for.\n"
+                "      \"no\":    List of proposals this wallet is casting a 'no' vote for.\n"
+                "}\n"
+        );
+
+    LOCK(cs_main);
+
+    UniValue ret(UniValue::VOBJ);
+    UniValue yesvotes(UniValue::VARR);
+    UniValue novotes(UniValue::VARR);
+    UniValue absvotes(UniValue::VARR);
+    UniValue nullvotes(UniValue::VARR);
+
+    CNavCoinAddress spendingAddress(params[0].get_str());
+    if (!spendingAddress.IsValid()) {
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid spending address");
+    }
+
+    if (!PoolExistsAccountFile(spendingAddress.ToString())) {
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, string("The spending address is not registered ") + spendingAddress.ToString());
+    }
+
+    std::vector<std::pair<std::string, bool>> votes;
+
+    PoolVoteProposalList(spendingAddress.ToString(), votes);
+    CStateViewCache view(pcoinsTip);
+
+    for (unsigned int i = 0; i < votes.size(); i++) {
+        CProposal proposal;
+
+        if (!view.GetProposal(uint256S(votes[i].first), proposal))
+            continue;
+
+        if (proposal.GetLastState() != DAOFlags::NIL)
+            continue;
+
+        if (votes[i].second == true)
+            yesvotes.push_back(votes[i].first);
+        else if (votes[i].second == false)
+            novotes.push_back(votes[i].first);
+    }
+
+    ret.pushKV("yes",yesvotes);
+    ret.pushKV("no",novotes);
+    ret.pushKV("abs",absvotes);
+    ret.pushKV("null",nullvotes);
+
+    return ret;
+}
+
 UniValue support(const UniValue& params, bool fHelp)
 {
     if (fHelp || params.size() < 1)

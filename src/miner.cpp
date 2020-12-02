@@ -1204,6 +1204,94 @@ void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& 
     bool fDAOConsultations = IsDAOEnabled(pindexPrev, chainparams.GetConsensus());
     bool fCFund = IsCommunityFundEnabled(pindexPrev, chainparams.GetConsensus());
 
+    //    if(fDAOConsultations && !GetBoolArg("-excludevote", false))
+//    {
+//        CConsultation consultation;
+//        CConsultationAnswer answer;
+//
+//        for (auto& it: mapSupported)
+//        {
+//            if (votes.count(it.first) != 0)
+//                continue;
+//
+//            if (coins.GetConsultation(it.first, consultation))
+//            {
+//                if (consultation.CanBeSupported())
+//                {
+//                    coinbaseTx.vout.resize(coinbaseTx.vout.size()+1);
+//
+//                    SetScriptForConsultationSupport(coinbaseTx.vout[coinbaseTx.vout.size()-1].scriptPubKey,consultation.hash);
+//                    coinbaseTx.vout[coinbaseTx.vout.size()-1].nValue = 0;
+//                    if (LogAcceptCategory("dao")) sLog += strprintf("%s: Adding consultation-support output %s\n", __func__, coinbaseTx.vout[coinbaseTx.vout.size()-1].ToString());
+//                    votes[consultation.hash] = true;
+//
+//                    continue;
+//                }
+//            }
+//            else if (coins.GetConsultationAnswer(it.first, answer))
+//            {
+//                if (answer.CanBeSupported(coins))
+//                {
+//                    coinbaseTx.vout.resize(coinbaseTx.vout.size()+1);
+//
+//                    SetScriptForConsultationSupport(coinbaseTx.vout[coinbaseTx.vout.size()-1].scriptPubKey,answer.hash);
+//                    coinbaseTx.vout[coinbaseTx.vout.size()-1].nValue = 0;
+//                    if (LogAcceptCategory("dao")) sLog += strprintf("%s: Adding consultation-support output %s\n", __func__, coinbaseTx.vout[coinbaseTx.vout.size()-1].ToString());
+//                    votes[answer.hash] = true;
+//
+//                    continue;
+//                }
+//            }
+//        }
+//
+//        std::map<uint256, int> mapCountAnswers;
+//        std::map<uint256, int> mapCacheMaxAnswers;
+//
+//        for (auto& it: mapAddedVotes)
+//        {
+//            int64_t vote = it.second;
+//
+//            if (!fDAOConsultations && vote == VoteFlags::VOTE_ABSTAIN)
+//                continue;
+//
+//            if (votes.count(it.first) != 0)
+//                continue;
+//
+//            if (coins.GetConsultation(it.first, consultation))
+//            {
+//                if (consultation.CanBeVoted(vote) && consultation.IsValidVote(vote))
+//                {
+//                    coinbaseTx.vout.resize(coinbaseTx.vout.size()+1);
+//
+//                    SetScriptForConsultationVote(coinbaseTx.vout[coinbaseTx.vout.size()-1].scriptPubKey,consultation.hash,vote);
+//                    coinbaseTx.vout[coinbaseTx.vout.size()-1].nValue = 0;
+//
+//                    if (LogAcceptCategory("dao")) sLog += strprintf("%s: Adding consultation-vote output %s\n", __func__, coinbaseTx.vout[coinbaseTx.vout.size()-1].ToString());
+//
+//                    votes[consultation.hash] = true;
+//
+//                    continue;
+//                }
+//            }
+//            else if (coins.GetConsultationAnswer(it.first, answer))
+//            {
+//                if (answer.CanBeVoted(coins))
+//                {
+//                    coinbaseTx.vout.resize(coinbaseTx.vout.size()+1);
+//
+//                    SetScriptForConsultationVote(coinbaseTx.vout[coinbaseTx.vout.size()-1].scriptPubKey,answer.hash,-2);
+//                    coinbaseTx.vout[coinbaseTx.vout.size()-1].nValue = 0;
+//
+//                    if (LogAcceptCategory("dao")) sLog += strprintf("%s: Adding consultation-answer-vote output %s\n", __func__, coinbaseTx.vout[coinbaseTx.vout.size()-1].ToString());
+//
+//                    votes[answer.hash] = true;
+//
+//                    continue;
+//                }
+//            }
+//        }
+//    }
+
     if(fCFund && !GetBoolArg("-excludevote", false))
     {
         CProposal proposal;
@@ -1237,13 +1325,13 @@ void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& 
             }
             else if(coins.GetPaymentRequest(it.first, prequest))
             {
-                if(!view.GetProposal(prequest.proposalhash, proposal))
+                if(!coins.GetProposal(prequest.proposalhash, proposal))
                     continue;
                 CBlockIndex* pblockindex = proposal.GetLastStateBlockIndexForState(DAOFlags::ACCEPTED);
                 if(pblockindex == nullptr)
                     continue;
                 if((proposal.CanRequestPayments() || proposal.GetLastState() == DAOFlags::PENDING_VOTING_PREQ)
-                        && prequest.CanVote(view) && votes.count(prequest.hash) == 0 &&
+                        && prequest.CanVote(coins) && votes.count(prequest.hash) == 0 &&
                         pindexPrev->nHeight - pblockindex->nHeight > Params().GetConsensus().nCommunityFundMinAge)
                 {
                     coinbaseTx.vout.resize(coinbaseTx.vout.size()+1);
@@ -1261,13 +1349,13 @@ void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& 
         UniValue strDZeel(UniValue::VARR);
         CPaymentRequestMap mapPaymentRequests;
 
-        if(view.GetAllPaymentRequests(mapPaymentRequests))
+        if(coins.GetAllPaymentRequests(mapPaymentRequests))
         {
             for (CPaymentRequestMap::iterator it_ = mapPaymentRequests.begin(); it_ != mapPaymentRequests.end(); it_++)
             {
                 CPaymentRequest prequest;
 
-                if (!view.GetPaymentRequest(it_->first, prequest))
+                if (!coins.GetPaymentRequest(it_->first, prequest))
                     continue;
                 CBlockIndex* pblockindex = prequest.GetLastStateBlockIndexForState(DAOFlags::ACCEPTED);
                 if(pblockindex == nullptr)
@@ -1279,7 +1367,7 @@ void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& 
                 if(prequest.GetLastState() == DAOFlags::ACCEPTED &&
                         pindexPrev->nHeight - pblockindex->nHeight > Params().GetConsensus().nCommunityFundMinAge) {
                     CProposal proposal;
-                    if(view.GetProposal(prequest.proposalhash, proposal)) {
+                    if(coins.GetProposal(prequest.proposalhash, proposal)) {
                         CNavCoinAddress addr(proposal.GetPaymentAddress());
 
                         if (!addr.IsValid())
