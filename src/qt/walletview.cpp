@@ -150,7 +150,7 @@ void WalletView::setWalletModel(WalletModel *walletModel)
     daoPage->setWalletModel(walletModel);
     receiveCoinsPage->setModel(walletModel);
     requestPaymentPage->setModel(walletModel);
-    requestPaymentPage->showQR();
+    requestPaymentPage->showPrivateAddress(0);
     sendCoinsPage->setModel(walletModel);
     usedReceivingAddressesPage->setModel(walletModel->getAddressTableModel());
     usedSendingAddressesPage->setModel(walletModel->getAddressTableModel());
@@ -238,6 +238,7 @@ void WalletView::gotoReceiveCoinsPage()
 }
 
 void WalletView::gotoRequestPaymentPage(){
+    requestPaymentPage->showPrivateAddress(0);
     setCurrentWidget(requestPaymentPage);
     daoPage->setActive(false);
 }
@@ -581,6 +582,16 @@ void WalletView::showProgress(const QString &title, int nProgress)
         progressDialog->setCancelButton(0);
         progressDialog->setAutoClose(false);
         progressDialog->setValue(0);
+        progressDialog->setRange(0,100);
+    }
+    else if (nProgress == -1)
+    {
+        progressDialog = new QProgressDialog(title, "", 0, 100);
+        progressDialog->setWindowModality(Qt::ApplicationModal);
+        progressDialog->setMinimumDuration(0);
+        progressDialog->setCancelButton(0);
+        progressDialog->setAutoClose(false);
+        progressDialog->setRange(0,0);
     }
     else if (nProgress == 100)
     {
