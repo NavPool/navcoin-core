@@ -812,7 +812,7 @@ bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParam
           pblock->vtx[0].vout[pblock->vtx[0].vout.size()-1].nValue = 0;
 
           CBlockIndex* pindexPrev = chainActive.Tip();
-          ApplyCommunityFundToCoinBase(pblock->vtx[0], chainparams, key, pindexPrev);
+          ApplyCommunityFundToCoinBase(pblock->vtx[0], chainparams, key, pindexPrev, sLog);
           if (txCoinStake.nTime >= chainActive.Tip()->GetPastTimeLimit()+1)
           {
               if (sLog != "")
@@ -1191,7 +1191,7 @@ bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParam
   return false;
 }
 
-void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& chainparams, CKey key, CBlockIndex* pindexPrev) {
+void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& chainparams, CKey key, CBlockIndex* pindexPrev, std::string sLog) {
     string stakingAddress = CNavCoinAddress(key.GetPubKey().GetID()).ToString();
     LogPrintf("Staking address: %s\n", stakingAddress);
 
@@ -1203,94 +1203,6 @@ void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& 
 
     bool fDAOConsultations = IsDAOEnabled(pindexPrev, chainparams.GetConsensus());
     bool fCFund = IsCommunityFundEnabled(pindexPrev, chainparams.GetConsensus());
-
-//    if(fDAOConsultations && !GetBoolArg("-excludevote", false))
-//    {
-//        CConsultation consultation;
-//        CConsultationAnswer answer;
-//
-//        for (auto& it: mapSupported)
-//        {
-//            if (votes.count(it.first) != 0)
-//                continue;
-//
-//            if (coins.GetConsultation(it.first, consultation))
-//            {
-//                if (consultation.CanBeSupported())
-//                {
-//                    coinbaseTx.vout.resize(coinbaseTx.vout.size()+1);
-//
-//                    SetScriptForConsultationSupport(coinbaseTx.vout[coinbaseTx.vout.size()-1].scriptPubKey,consultation.hash);
-//                    coinbaseTx.vout[coinbaseTx.vout.size()-1].nValue = 0;
-//                    if (LogAcceptCategory("dao")) sLog += strprintf("%s: Adding consultation-support output %s\n", __func__, coinbaseTx.vout[coinbaseTx.vout.size()-1].ToString());
-//                    votes[consultation.hash] = true;
-//
-//                    continue;
-//                }
-//            }
-//            else if (coins.GetConsultationAnswer(it.first, answer))
-//            {
-//                if (answer.CanBeSupported(coins))
-//                {
-//                    coinbaseTx.vout.resize(coinbaseTx.vout.size()+1);
-//
-//                    SetScriptForConsultationSupport(coinbaseTx.vout[coinbaseTx.vout.size()-1].scriptPubKey,answer.hash);
-//                    coinbaseTx.vout[coinbaseTx.vout.size()-1].nValue = 0;
-//                    if (LogAcceptCategory("dao")) sLog += strprintf("%s: Adding consultation-support output %s\n", __func__, coinbaseTx.vout[coinbaseTx.vout.size()-1].ToString());
-//                    votes[answer.hash] = true;
-//
-//                    continue;
-//                }
-//            }
-//        }
-//
-//        std::map<uint256, int> mapCountAnswers;
-//        std::map<uint256, int> mapCacheMaxAnswers;
-//
-//        for (auto& it: mapAddedVotes)
-//        {
-//            int64_t vote = it.second;
-//
-//            if (!fDAOConsultations && vote == VoteFlags::VOTE_ABSTAIN)
-//                continue;
-//
-//            if (votes.count(it.first) != 0)
-//                continue;
-//
-//            if (coins.GetConsultation(it.first, consultation))
-//            {
-//                if (consultation.CanBeVoted(vote) && consultation.IsValidVote(vote))
-//                {
-//                    coinbaseTx.vout.resize(coinbaseTx.vout.size()+1);
-//
-//                    SetScriptForConsultationVote(coinbaseTx.vout[coinbaseTx.vout.size()-1].scriptPubKey,consultation.hash,vote);
-//                    coinbaseTx.vout[coinbaseTx.vout.size()-1].nValue = 0;
-//
-//                    if (LogAcceptCategory("dao")) sLog += strprintf("%s: Adding consultation-vote output %s\n", __func__, coinbaseTx.vout[coinbaseTx.vout.size()-1].ToString());
-//
-//                    votes[consultation.hash] = true;
-//
-//                    continue;
-//                }
-//            }
-//            else if (coins.GetConsultationAnswer(it.first, answer))
-//            {
-//                if (answer.CanBeVoted(coins))
-//                {
-//                    coinbaseTx.vout.resize(coinbaseTx.vout.size()+1);
-//
-//                    SetScriptForConsultationVote(coinbaseTx.vout[coinbaseTx.vout.size()-1].scriptPubKey,answer.hash,-2);
-//                    coinbaseTx.vout[coinbaseTx.vout.size()-1].nValue = 0;
-//
-//                    if (LogAcceptCategory("dao")) sLog += strprintf("%s: Adding consultation-answer-vote output %s\n", __func__, coinbaseTx.vout[coinbaseTx.vout.size()-1].ToString());
-//
-//                    votes[answer.hash] = true;
-//
-//                    continue;
-//                }
-//            }
-//        }
-//    }
 
     if(fCFund && !GetBoolArg("-excludevote", false))
     {

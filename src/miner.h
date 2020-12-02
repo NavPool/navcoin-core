@@ -226,7 +226,7 @@ int64_t UpdateTime(CBlockHeader* pblock, const Consensus::Params& consensusParam
 bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParams& chainparams, std::string sLog);
 
 /** Add cfund votes to the coinbase */
-void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& chainparams, CKey key, CBlockIndex* pindexPrev);
+void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& chainparams, CKey key, CBlockIndex* pindexPrev, std::string sLog);
 
 /** Check mined proof-of-stake block */
 bool CheckStake(CBlock* pblock, CWallet& wallet, const CChainParams& chainparams);
