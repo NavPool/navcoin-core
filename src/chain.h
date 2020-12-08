@@ -17,9 +17,10 @@
 
 #include <vector>
 
-#define BLOCK_PROOF_OF_STAKE 0x01 // is proof-of-stake block
-#define BLOCK_STAKE_ENTROPY  0x02 // entropy bit for stake modifier
-#define BLOCK_STAKE_MODIFIER 0x04
+#define BLOCK_PROOF_OF_STAKE    0x01 // is proof-of-stake block
+#define BLOCK_STAKE_ENTROPY     0x02 // entropy bit for stake modifier
+#define BLOCK_STAKE_MODIFIER    0x04
+#define BLOCK_COLD_STAKE_V2     0x08
 
 /**
  * Maximum gap between node time and block time used
@@ -233,6 +234,9 @@ public:
     //! (memory only) Sequential id assigned to distinguish order in which blocks are received.
     uint32_t nSequenceId;
 
+    CAmount nPrivateMoneySupply;
+    CAmount nPublicMoneySupply;
+
     void SetNull()
     {
         phashBlock = NULL;
@@ -250,6 +254,8 @@ public:
         nMint = 0;
         nCFSupply = 0;
         nCFLocked = 0;
+        nPrivateMoneySupply = 0;
+        nPublicMoneySupply = 0;
         nFlags = 0;
         nStakeModifier = 0;
         hashProof = arith_uint256();
@@ -410,6 +416,16 @@ public:
         return (nFlags & BLOCK_PROOF_OF_STAKE);
     }
 
+    void SetColdStakeV2()
+    {
+        nFlags |= BLOCK_COLD_STAKE_V2;
+    }
+
+    bool IsColdStakeV2() const
+    {
+        return (nFlags & BLOCK_COLD_STAKE_V2);
+    }
+
     void SetProofOfStake()
     {
         nFlags |= BLOCK_PROOF_OF_STAKE;
@@ -525,7 +541,24 @@ public:
         READWRITE(nNonce);
         READWRITE(blockHash);
         READWRITE(nCFSupply);
-        READWRITE(nCFLocked);
+        if (ser_action.ForRead())
+        {
+            READWRITE(nCFLocked);
+            if (nCFLocked == (uint64_t)-1)
+            {
+                READWRITE(nCFLocked);
+                READWRITE(nPrivateMoneySupply);
+                READWRITE(nPublicMoneySupply);
+            }
+        }
+        else
+        {
+            uint64_t nMarker = -1;
+            READWRITE(nMarker);
+            READWRITE(nCFLocked);
+            READWRITE(nPrivateMoneySupply);
+            READWRITE(nPublicMoneySupply);
+        }
         // UPDATE if versionbits.h is modified
         if (this->nStatus & BLOCK_OPT_DAO)
         {
