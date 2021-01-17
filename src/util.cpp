@@ -616,13 +616,21 @@ const boost::filesystem::path &GetDataDir(bool fNetSpecific)
 
     fs::path &path = fNetSpecific ? pathCachedNetSpecific : pathCached;
 
-    // This can be called during exceptions by LogPrintf(), so we cache the
-    // value so we don't have to do memory allocations after that.
-    if (!path.empty())
-        return path;
+    // Cache the path to avoid calling fs::create_directories on every call of
+    // this function
+    if (!path.empty()) return path;
 
-    if (mapArgs.count("-datadir")) {
-        path = fs::system_complete(mapArgs["-datadir"]);
+    std::string datadir = GetArg("-datadir", "");
+    if (!datadir.empty()) {
+        if (datadir[0] == '~') {
+            char const* home = getenv("HOME");
+            if (home or ((home = getenv("USERPROFILE")))) {
+                datadir.replace(0, 1, home);
+            }
+        }
+
+        path = fs::system_complete(datadir);
+
         if (!fs::is_directory(path)) {
             path = "";
             return path;
@@ -1337,32 +1345,26 @@ bool BdbEncrypted(boost::filesystem::path wallet)
     file.seekg(0, std::ios::end);
     size_t length = file.tellg();
 
-    // Check if we can even go that far
-    if (length < 8190)
-        return true;
+    // Loop the file contents
+    for (int i = 0; i < length; i++) {
+        // Reset our cursor
+        file.seekg(i, file.beg);
 
-    // Reset our cursor
-    file.seekg(8187, file.beg);
+        // Read data from the file
+        file.read(buffer, 5);
 
-    // Read data from the file
-    file.read(buffer, 5);
+        // Check if we have it
+        if (string(buffer) == "main") {
+            // Close the file
+            file.close();
 
-    // Check if we have it
-    if (string(buffer) == "main")
-        return false;
-
-    // Reset our cursor for older wallet formats
-    file.seekg(16379, file.beg);
-
-    // Read data from the file
-    file.read(buffer, 5);
+            // It's not encrypted
+            return false;
+        }
+    }
 
     // Close the file
     file.close();
-
-    // Check if we have it
-    if (string(buffer) == "main")
-        return false;
 
     // It's encrypted
     return true;

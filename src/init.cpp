@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2015 The Bitcoin Core developers
-// Copyright (c) 2018 The NavCoin developers
+// Copyright (c) 2018-2020 The NavCoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -1180,7 +1180,7 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler, const std
 
     fServer = GetBoolArg("-server", false);
 
-    fTorServer = GetBoolArg("-torserver", true);
+    fTorServer = GetBoolArg("-torserver", false);
 
     if (fTorServer)
         TorThreadInit();

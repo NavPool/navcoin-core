@@ -334,8 +334,7 @@ WalletModel::SendCoinsReturn WalletModel::prepareTransaction(WalletModelTransact
         CReserveKey *keyChange = transaction.getPossibleKeyChange();
         std::vector<shared_ptr<CReserveBLSCTBlindingKey>> *reserveBLSCTKey = transaction.getPossibleBLSCTBlindingKey();
 
-        CWalletTx *newTx;
-        newTx = new CWalletTx();
+        CWalletTx *newTx = transaction.getTransaction();
 
         fCreated = wallet->CreateTransaction(vec, *newTx, *keyChange, *reserveBLSCTKey, nFeeRequired, nChangePosRet, strFailReason, fPrivate, coinControl, true, selectedCoins);
         if (newTx->fSpendsColdStaking)
@@ -678,6 +677,12 @@ bool WalletModel::isSpent(const COutPoint& outpoint) const
 {
     LOCK2(cs_main, wallet->cs_wallet);
     return wallet->IsSpent(outpoint.hash, outpoint.n);
+}
+
+bool WalletModel::GenerateBLSCT()
+{
+    LOCK2(cs_main, wallet->cs_wallet);
+    return wallet->GenerateBLSCT();
 }
 
 void WalletModel::listPrivateCoins(std::map<QString, std::vector<COutput> >& mapCoins) const

@@ -615,8 +615,6 @@ UniValue generateblsctkeys(const UniValue& params, bool fHelp)
 
     EnsureWalletIsUnlocked();
 
-    uint32_t BIP32_HARDENED_KEY_LIMIT = 0x80000000;
-
     CKeyID masterKeyID = pwalletMain->GetHDChain().masterKeyID;
     CKey key;
 
@@ -625,26 +623,7 @@ UniValue generateblsctkeys(const UniValue& params, bool fHelp)
         throw JSONRPCError(RPC_MISC_ERROR, "Could not generate BLSCT parameters. If your wallet is encrypted, you must first unlock your wallet.");
     }
 
-    CHashWriter h(0, 0);
-    std::vector<unsigned char> vKey(key.begin(), key.end());
-
-    h << vKey;
-
-    uint256 hash = h.GetHash();
-    unsigned char h_[32];
-    memcpy(h_, &hash, 32);
-
-    blsctKey masterBLSKey = blsctKey(bls::PrivateKey::FromSeed(h_, 32));
-    blsctKey childBLSKey = blsctKey(masterBLSKey.PrivateChild(BIP32_HARDENED_KEY_LIMIT|130));
-    blsctKey transactionBLSKey = blsctKey(childBLSKey.PrivateChild(BIP32_HARDENED_KEY_LIMIT));
-    bls::PrivateKey blindingBLSKey = childBLSKey.PrivateChild(BIP32_HARDENED_KEY_LIMIT|1);
-    bls::PrivateKey viewKey = transactionBLSKey.PrivateChild(BIP32_HARDENED_KEY_LIMIT);
-    bls::PrivateKey spendKey = transactionBLSKey.PrivateChild(BIP32_HARDENED_KEY_LIMIT|1);
-
-    pwalletMain->SetBLSCTKeys(viewKey, spendKey, blindingBLSKey);
-
-    pwalletMain->NewBLSCTBlindingKeyPool();
-    pwalletMain->NewBLSCTSubAddressKeyPool(0);
+    pwalletMain->GenerateBLSCT();
 
     LogPrintf("Generated BLSCT parameters.\n");
 
@@ -5034,7 +5013,7 @@ UniValue listproposals(const UniValue& params, bool fHelp)
                 "\nList the proposals and all the relating data including payment requests and status.\n"
                 "\nNote passing no argument returns all proposals regardless of state.\n"
                 "\nArguments:\n"
-                "\n1. \"filter\" (string, optional)   \"accepted\" | \"rejected\" | \"expired\" | \"pending\" | \"mine\"\n"
+                "\n1. \"filter\" (string, optional)   \"accepted\" | \"rejected\" | \"expired\" | \"pending\" | \"mine\" | \"accepted_expired\"\n"
                 "\nExamples:\n"
                 + HelpExampleCli("listproposal", "mine accepted")
                 + HelpExampleCli("listproposal", "accepted")
@@ -5049,6 +5028,7 @@ UniValue listproposals(const UniValue& params, bool fHelp)
     bool showAccepted = false;
     bool showRejected = false;
     bool showExpired = false;
+    bool showAcceptedExpired = false;
     bool showPending = false;
     bool showMine = false;
     for(unsigned int i = 0; i < params.size(); i++) {
@@ -5071,6 +5051,10 @@ UniValue listproposals(const UniValue& params, bool fHelp)
         else if(params[i].get_str() == "mine") {
             showAll = false;
             showMine = true;
+        }
+        else if(params[i].get_str() == "accepted_expired") {
+            showAll = false;
+            showAcceptedExpired = true;
         }
     }
 
@@ -5103,6 +5087,7 @@ UniValue listproposals(const UniValue& params, bool fHelp)
                     || (showPending  && (fLastState == DAOFlags::NIL || fLastState == DAOFlags::PENDING_VOTING_PREQ
                                          || fLastState == DAOFlags::PENDING_FUNDS))
                     || (showAccepted && (fLastState == DAOFlags::ACCEPTED))
+                    || (showAcceptedExpired && (fLastState == DAOFlags::ACCEPTED_EXPIRED))
                     || (showRejected && (fLastState == DAOFlags::REJECTED))
                     || (showExpired  &&  proposal.IsExpired(pindexBestHeader->GetBlockTime(), view))) {
                 UniValue o(UniValue::VOBJ);

@@ -21,6 +21,7 @@
 #define BLOCK_STAKE_ENTROPY     0x02 // entropy bit for stake modifier
 #define BLOCK_STAKE_MODIFIER    0x04
 #define BLOCK_COLD_STAKE_V2     0x08
+#define BLOCK_BLSCT_TX          0x10
 
 /**
  * Maximum gap between node time and block time used
@@ -163,6 +164,7 @@ enum BlockStatus: uint32_t {
 
     BLOCK_OPT_WITNESS        =   128, //! block data in blk*.data was received with a witness-enforcing client
     BLOCK_OPT_DAO            =   256, //! DAO data structures
+    BLOCK_OPT_SUPPLY         =   512, //! supply data structures
 };
 
 /** The block chain is a tree shaped structure starting with the
@@ -426,6 +428,16 @@ public:
         return (nFlags & BLOCK_COLD_STAKE_V2);
     }
 
+    void SetBLSCTTransactions()
+    {
+        nFlags |= BLOCK_BLSCT_TX;
+    }
+
+    bool HasBLSCTTransactions() const
+    {
+        return (nFlags & BLOCK_BLSCT_TX);
+    }
+
     void SetProofOfStake()
     {
         nFlags |= BLOCK_PROOF_OF_STAKE;
@@ -541,25 +553,8 @@ public:
         READWRITE(nNonce);
         READWRITE(blockHash);
         READWRITE(nCFSupply);
-        if (ser_action.ForRead())
-        {
-            READWRITE(nCFLocked);
-            if (nCFLocked == (uint64_t)-1)
-            {
-                READWRITE(nCFLocked);
-                READWRITE(nPrivateMoneySupply);
-                READWRITE(nPublicMoneySupply);
-            }
-        }
-        else
-        {
-            uint64_t nMarker = -1;
-            READWRITE(nMarker);
-            READWRITE(nCFLocked);
-            READWRITE(nPrivateMoneySupply);
-            READWRITE(nPublicMoneySupply);
-        }
-        // UPDATE if versionbits.h is modified
+        READWRITE(nCFLocked);
+
         if (this->nStatus & BLOCK_OPT_DAO)
         {
             READWRITE(vPaymentRequestVotes);
@@ -601,6 +596,12 @@ public:
         {
             READWRITE(mapSupport);
             READWRITE(mapConsultationVotes);
+        }
+
+        if (this->nStatus & BLOCK_OPT_SUPPLY)
+        {
+            READWRITE(nPrivateMoneySupply);
+            READWRITE(nPublicMoneySupply);
         }
     }
 

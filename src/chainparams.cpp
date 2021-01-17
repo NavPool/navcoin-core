@@ -1,6 +1,6 @@
 // Copyright (c) 2010 Satoshi Nakamoto
 // Copyright (c) 2009-2015 The Bitcoin Core developers
-// Copyright (c) 2017-2018 The NavCoin Core developers
+// Copyright (c) 2017-2020 The NavCoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -237,7 +237,7 @@ public:
 
         // Deployment of Exclude voters
         consensus.vDeployments[Consensus::DEPLOYMENT_EXCLUDE].bit = 12;
-        consensus.vDeployments[Consensus::DEPLOYMENT_EXCLUDE].nStartTime = 1611964800; //Jan 30th, 2021
+        consensus.vDeployments[Consensus::DEPLOYMENT_EXCLUDE].nStartTime = 1612137600; //Feb 1st, 2021
         consensus.vDeployments[Consensus::DEPLOYMENT_EXCLUDE].nTimeout = 1633879915; // oct 10th, 2021
 
         // Deployment of Cold Staking Pool Fee
@@ -247,7 +247,7 @@ public:
 
         // Deployment of BLSCT
         consensus.vDeployments[Consensus::DEPLOYMENT_BLSCT].bit = 10;
-        consensus.vDeployments[Consensus::DEPLOYMENT_BLSCT].nStartTime = 1611964800; // Jan 30th, 2021
+        consensus.vDeployments[Consensus::DEPLOYMENT_BLSCT].nStartTime = 1612137600; // Feb 1st, 2021
         consensus.vDeployments[Consensus::DEPLOYMENT_BLSCT].nTimeout = 1640995200; // Jun 1st, 2022
 
         /**

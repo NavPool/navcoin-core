@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2015 The Bitcoin Core developers
-// Copyright (c) 2017-2018 The NavCoin Core developers
+// Copyright (c) 2017-2021 The NavCoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -1176,6 +1176,9 @@ bool CheckTransaction(const CTransaction& tx, CValidationState &state)
     if ((tx.IsBLSInput() && (tx.vchBalanceSig.size() == 0 || tx.vchTxSig.size() == 0)) || (!tx.IsBLSInput() && (tx.vchTxSig.size() > 0)))
         return state.DoS(100, false, REJECT_INVALID, "bad-blsinput-version-flag");
 
+    if (tx.IsCoinBase() && (tx.IsBLSInput() || tx.IsCTOutput()))
+        return state.DoS(100, false, REJECT_INVALID, "bad-blsct-coinbase");
+
     // Check for negative or overflow output values
     CAmount nValueOut = 0;
     for(const CTxOut& txout: tx.vout)
@@ -1199,6 +1202,17 @@ bool CheckTransaction(const CTransaction& tx, CValidationState &state)
             return state.DoS(100, false, REJECT_INVALID, "bad-txns-inputs-duplicate");
         vInOutPoints.insert(txin.prevout);
     }
+
+    // Check for duplicate bls outputs
+    set<CTxOut> vBlsOut;
+    for(const CTxOut& txout: tx.vout)
+    {
+        if (!txout.IsBLSCT()) continue;
+        if (vBlsOut.count(txout))
+            return state.DoS(100, false, REJECT_INVALID, "bad-txns-ctout-duplicate");
+        vBlsOut.insert(txout);
+    }
+
 
     if (tx.IsCoinBase())
     {
@@ -2352,7 +2366,7 @@ bool CheckTxInputs(const CTransaction& tx, CValidationState& state, const CState
                                  REJECT_INVALID, "bad-mix-bls-inputs",
                                  "transaction mixes bls and legacy inputs");
 
-#if defined(CLIENT_BUILD_IS_TEST_RELEASE)
+#if CLIENT_BUILD_IS_TEST_RELEASE
         bool fTestNet = GetBoolArg("-testnet", true);
 #else
         bool fTestNet = GetBoolArg("-testnet", false);
@@ -2395,9 +2409,7 @@ bool CheckTxInputs(const CTransaction& tx, CValidationState& state, const CState
         {
             blsctKey v;
 
-            if (pwalletMain)
-                pwalletMain->GetBLSCTViewKey(v);
-            else
+            if (!(pwalletMain && pwalletMain->GetBLSCTViewKey(v)))
                 v = blsctKey(bls::PrivateKey::FromBN(Scalar::Rand().bn));
 
             if (!tx.IsCoinStake() && !VerifyBLSCT(tx, v.GetKey(), blsctData, inputs, state, false, allowedInPrivate))
@@ -2421,9 +2433,6 @@ bool CheckInputs(const CTransaction& tx, CValidationState &state, const CStateVi
     {
         if (!Consensus::CheckTxInputs(tx, state, inputs, GetSpendHeight(inputs), blsctData, allowedInPrivate))
             return false;
-
-        if (tx.IsBLSInput())
-            return true;
 
         if (pvChecks)
             pvChecks->reserve(tx.vin.size());
@@ -3166,7 +3175,7 @@ int32_t ComputeBlockVersion(const CBlockIndex* pindexPrev, const Consensus::Para
     if(IsDaoConsensusEnabled(pindexPrev,Params().GetConsensus()))
         nVersion |= nDaoConsensusVersionMask;
 
-#if defined(CLIENT_BUILD_IS_TEST_RELEASE)
+#if CLIENT_BUILD_IS_TEST_RELEASE
     bool fTestnet = GetBoolArg("-testnet", true);
 #else
     bool fTestnet = GetBoolArg("-testnet", false);
@@ -4097,6 +4106,9 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
 
         txdata.emplace_back(tx);
 
+        if (tx.IsBLSCT())
+            pindex->SetBLSCTTransactions();
+
         if (!tx.IsCoinBase())
         {
             if (!tx.IsCoinStake())
@@ -4645,6 +4657,7 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
 
     pindex->nPublicMoneySupply += nCreated + nMovedToPublic - nBLSCTPublicFees;
     pindex->nPrivateMoneySupply += nMovedToBLS - nBLSCTPrivateFees - nMovedToPublic;
+    pindex->nStatus |= BLOCK_OPT_SUPPLY;
 
     if (pindex->nPrivateMoneySupply < 0)
         return state.DoS(100, error("ConnectBlock() : private money supply goes in negative"));
@@ -5975,7 +5988,7 @@ bool ContextualCheckBlockHeader(const CBlockHeader& block, CValidationState& sta
     if((block.nVersion & nCFundVersionMask) != nCFundVersionMask && IsCommunityFundEnabled(pindexPrev,Params().GetConsensus()))
         return state.Invalid(false, REJECT_OBSOLETE, strprintf("bad-version(0x%08x)", block.nVersion),
                            "rejected no cfund block");
-#if defined(CLIENT_BUILD_IS_TEST_RELEASE)
+#if CLIENT_BUILD_IS_TEST_RELEASE
     bool fTestNet = GetBoolArg("-testnet", true);
 #else
     bool fTestNet = GetBoolArg("-testnet", false);
@@ -6025,7 +6038,7 @@ bool ContextualCheckBlockHeader(const CBlockHeader& block, CValidationState& sta
         return state.Invalid(false, REJECT_OBSOLETE, strprintf("bad-version(0x%08x)", block.nVersion),
                          "rejected no consultations block");
 
-#if defined(CLIENT_BUILD_IS_TEST_RELEASE)
+#if CLIENT_BUILD_IS_TEST_RELEASE
     bool fTestnet = GetBoolArg("-testnet", true);
 #else
     bool fTestnet = GetBoolArg("-testnet", false);
