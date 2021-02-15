@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2015 The Bitcoin Core developers
-// Copyright (c) 2017-2021 The NavCoin Core developers
+// Copyright (c) 2017-2021 The Navcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -2710,7 +2710,7 @@ bool DisconnectBlock(const CBlock& block, CValidationState& state, const CBlockI
                     int type = 0;
                     CTxDestination destination;
                     ExtractDestination(out.scriptPubKey, destination);
-                    CNavCoinAddress address(destination);
+                    CNavcoinAddress address(destination);
                     address.GetIndexKey(hashBytes, type);
 
                     // undo spending activity
@@ -2725,13 +2725,13 @@ bool DisconnectBlock(const CBlock& block, CValidationState& state, const CBlockI
                         addressHistoryMap.insert(std::make_pair(addressHistoryKey, CAddressHistoryValue()));
 
                 } else if (out.scriptPubKey.IsColdStaking() || out.scriptPubKey.IsColdStakingv2()) {
-                    CNavCoinAddress addressStaking, addressVoting, addressSpending;
+                    CNavcoinAddress addressStaking, addressVoting, addressSpending;
                     uint160 hashBytes, hashBytesSpending, hashBytesStaking, hashBytesVoting;
                     int type = 0;
 
                     CTxDestination destination;
                     ExtractDestination(out.scriptPubKey, destination);
-                    CNavCoinAddress address(destination);
+                    CNavcoinAddress address(destination);
                     address.GetIndexKey(hashBytes, type);
                     address.GetSpendingAddress(addressSpending);
                     addressSpending.GetIndexKey(hashBytesSpending, type);
@@ -2846,7 +2846,7 @@ bool DisconnectBlock(const CBlock& block, CValidationState& state, const CBlockI
                         int type = 0;
                         CTxDestination destination;
                         ExtractDestination(prevout.scriptPubKey, destination);
-                        CNavCoinAddress address(destination);
+                        CNavcoinAddress address(destination);
                         address.GetIndexKey(hashBytes, type);
 
                         // undo spending activity
@@ -2862,7 +2862,7 @@ bool DisconnectBlock(const CBlock& block, CValidationState& state, const CBlockI
                     }
                     else if (prevout.scriptPubKey.IsColdStaking() || prevout.scriptPubKey.IsColdStakingv2())
                     {
-                        CNavCoinAddress addressStaking, addressVoting, addressSpending;
+                        CNavcoinAddress addressStaking, addressVoting, addressSpending;
 
                         uint160 hashBytes, hashBytesSpending, hashBytesStaking, hashBytesVoting;
 
@@ -2870,7 +2870,7 @@ bool DisconnectBlock(const CBlock& block, CValidationState& state, const CBlockI
                         CTxDestination destination;
 
                         ExtractDestination(prevout.scriptPubKey, destination);
-                        CNavCoinAddress address(destination);
+                        CNavcoinAddress address(destination);
 
                         if (prevout.scriptPubKey.IsColdStaking() || prevout.scriptPubKey.IsColdStakingv2())
                             address.GetSpendingAddress(addressSpending);
@@ -3478,8 +3478,17 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
     int64_t nTimeStart = GetTimeMicros();
     int64_t nStakeReward = 0;
 
+    bool fScriptChecks = true;
+    if (fCheckpointsEnabled) {
+        CBlockIndex *pindexLastCheckpoint = Checkpoints::GetLastCheckpoint(chainparams.Checkpoints());
+        if (pindexLastCheckpoint && pindexLastCheckpoint->GetAncestor(pindex->nHeight) == pindex) {
+            // This block is an ancestor of a checkpoint: disable script checks
+            fScriptChecks = false;
+        }
+    }
+
     // Check it again in case a previous version let a bad block in
-    if (!CheckBlock(block, state, chainparams.GetConsensus(), !fJustCheck, !fJustCheck, !fJustCheck))
+    if (!CheckBlock(block, state, chainparams.GetConsensus(), !fJustCheck, !fJustCheck, !fJustCheck, fScriptChecks))
         return error("%s: Consensus::CheckBlock: %s", __func__, FormatStateMessage(state));
 
     // verify that the view's current state corresponds to the previous block
@@ -3489,7 +3498,6 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
 
     // Special case for the genesis block, skipping connection of its transactions
     // (its coinbase is unspendable)
-
     if (block.GetHash() == chainparams.GetConsensus().hashGenesisBlock) {
         if (!fJustCheck)
             view.SetBestBlock(pindex->GetBlockHash());
@@ -3497,7 +3505,7 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
     }
 
     // Check proof of stake
-    if (block.nBits != GetNextTargetRequired(pindex->pprev, block.IsProofOfStake())){
+    if (fScriptChecks && block.nBits != GetNextTargetRequired(pindex->pprev, block.IsProofOfStake())){
         return state.DoS(1,error("ContextualCheckBlock() : incorrect %s at height %d (%d)", !block.IsProofOfStake() ? "proof-of-work" : "proof-of-stake",pindex->pprev->nHeight, block.nBits), REJECT_INVALID, "bad-diffbits");
     }
 
@@ -3515,7 +3523,7 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
         }
 
         // ppcoin: coin stake tx earns reward instead of paying fee
-        if (!TransactionGetCoinAge(const_cast<CTransaction&>(block.vtx[1]), nCoinAge, view))
+        if (fScriptChecks && !TransactionGetCoinAge(const_cast<CTransaction&>(block.vtx[1]), nCoinAge, view))
             return error("ConnectBlock() : %s unable to get coin age for coinstake", block.vtx[1].GetHash().ToString());
     }
 
@@ -3527,7 +3535,6 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
 
     // Record proof hash value
     pindex->hashProof = hashProof;
-
     uint64_t nStakeModifier = 0;
     bool fGeneratedStakeModifier = false;
     if (!ComputeNextStakeModifier(pindex->pprev, nStakeModifier, fGeneratedStakeModifier))
@@ -3540,16 +3547,6 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
     {
         pindex->RaiseValidity(BLOCK_VALID_STAKE);
         setDirtyBlockIndex.insert(pindex);
-    }
-
-
-    bool fScriptChecks = true;
-    if (fCheckpointsEnabled) {
-        CBlockIndex *pindexLastCheckpoint = Checkpoints::GetLastCheckpoint(chainparams.Checkpoints());
-        if (pindexLastCheckpoint && pindexLastCheckpoint->GetAncestor(pindex->nHeight) == pindex) {
-            // This block is an ancestor of a checkpoint: disable script checks
-            fScriptChecks = false;
-        }
     }
 
     int64_t nTime1 = GetTimeMicros(); nTimeCheck += nTime1 - nTimeStart;
@@ -3660,7 +3657,7 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
 
     std::vector<unsigned char> stakerScript;
 
-    if (fStake)
+    if (fStake && fColdStakingv2)
     {
         const CTransaction &txRead = block.vtx[1];
         CTransaction txPrev;
@@ -3962,7 +3959,7 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
                     } else if (prevout.scriptPubKey.IsPayToPublicKeyHash() || prevout.scriptPubKey.IsPayToPublicKey()) {
                         CTxDestination destination;
                         ExtractDestination(prevout.scriptPubKey, destination);
-                        CNavCoinAddress address(destination);
+                        CNavcoinAddress address(destination);
                         address.GetIndexKey(hashBytes, addressType);
 
                         CAddressHistoryKey addressHistoryKey(hashBytes, hashBytes, pindex->nHeight, i, txhash, tx.nTime);
@@ -3977,10 +3974,10 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
                     {
                         CTxDestination destination;
                         uint160 hashBytesSpending, hashBytesStaking;
-                        CNavCoinAddress addressStaking, addresssSpending;
+                        CNavcoinAddress addressStaking, addresssSpending;
 
                         ExtractDestination(prevout.scriptPubKey, destination);
-                        CNavCoinAddress address(destination);
+                        CNavcoinAddress address(destination);
                         address.GetSpendingAddress(addresssSpending);
                         address.GetIndexKey(hashBytes, addressType);
                         addresssSpending.GetIndexKey(hashBytesSpending, addressType);
@@ -4020,10 +4017,10 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
                     {
                         CTxDestination destination;
                         uint160 hashBytesStaking, hashBytesVoting, hashBytesSpending;
-                        CNavCoinAddress addressStaking, addressVoting, addresssSpending;
+                        CNavcoinAddress addressStaking, addressVoting, addresssSpending;
 
                         ExtractDestination(prevout.scriptPubKey, destination);
-                        CNavCoinAddress address(destination);
+                        CNavcoinAddress address(destination);
                         address.GetSpendingAddress(addresssSpending);
                         address.GetIndexKey(hashBytes, addressType);
                         addresssSpending.GetIndexKey(hashBytesSpending, addressType);
@@ -4202,11 +4199,11 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
                 } else if (out.scriptPubKey.IsColdStaking())
                 {
                     uint160 hashBytes, hashBytesStaking, hashBytesSpending;
-                    CNavCoinAddress addressSpending, addressStaking;
+                    CNavcoinAddress addressSpending, addressStaking;
                     int type = 0;
                     CTxDestination destination;
                     ExtractDestination(out.scriptPubKey, destination);
-                    CNavCoinAddress address(destination);
+                    CNavcoinAddress address(destination);
                     address.GetSpendingAddress(addressSpending);
                     address.GetIndexKey(hashBytes, type);
                     addressSpending.GetIndexKey(hashBytesSpending, type);
@@ -4249,12 +4246,12 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
                 else if (out.scriptPubKey.IsColdStakingv2())
                 {
                     uint160 hashBytes, hashBytesStaking, hashBytesVoting, hashBytesSpending;
-                    CNavCoinAddress addressSpending, addressStaking, addressVoting;
+                    CNavcoinAddress addressSpending, addressStaking, addressVoting;
 
                     int type = 0;
                     CTxDestination destination;
                     ExtractDestination(out.scriptPubKey, destination);
-                    CNavCoinAddress address(destination);
+                    CNavcoinAddress address(destination);
                     address.GetSpendingAddress(addressSpending);
                     addressSpending.GetIndexKey(hashBytesSpending, type);
                     address.GetIndexKey(hashBytes, type);
@@ -4315,7 +4312,7 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
                     int type = 0;
                     CTxDestination destination;
                     ExtractDestination(out.scriptPubKey, destination);
-                    CNavCoinAddress address(destination);
+                    CNavcoinAddress address(destination);
                     address.GetIndexKey(hashBytes, type);
 
                     // record spending activity
@@ -4599,7 +4596,7 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
 
                 bool fv452Fork = (pindex->pprev->nHeight >= Params().GetConsensus().nHeightv452Fork);
 
-                if(block.vtx[0].vout[i].nValue != prequest.nAmount || (fv452Fork && prequest.GetLastState() != DAOFlags::ACCEPTED) || proposal.GetPaymentAddress() != CNavCoinAddress(address).ToString())
+                if(block.vtx[0].vout[i].nValue != prequest.nAmount || (fv452Fork && prequest.GetLastState() != DAOFlags::ACCEPTED) || proposal.GetPaymentAddress() != CNavcoinAddress(address).ToString())
                     return state.DoS(100, error("CheckBlock() : coinbase output does not match an accepted payment request"));
 
                 CBlockIndex* pblockindex = prequest.GetLastStateBlockIndexForState(DAOFlags::ACCEPTED);
@@ -4625,7 +4622,7 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
     {
         int64_t nCalculatedStakeReward = GetProofOfStakeReward(pindex->nHeight, nCoinAge, nFees, pindex->pprev, view);
 
-        if (nStakeReward > nCalculatedStakeReward)
+        if (fScriptChecks && nStakeReward > nCalculatedStakeReward)
             return state.DoS(100, error("ConnectBlock() : coinstake pays too much(actual=%d vs calculated=%d)", nStakeReward, nCalculatedStakeReward));
 
         if (block.vtx[1].IsCTOutput()) // coinstake moving to private is checked after the loop
@@ -4914,7 +4911,7 @@ void static UpdateTip(CBlockIndex *pindexNew, uint256 statehash, const CChainPar
         int nUpgraded = 0;
         const CBlockIndex* pindex = chainActive.Tip();
 //
-// Commented - NavCoin uses now version control
+// Commented - Navcoin uses now version control
 //
 //        for (int bit = 0; bit < VERSIONBITS_NUM_BITS; bit++) {
 //            WarningBitsConditionChecker checker(bit);
@@ -4989,7 +4986,7 @@ bool static DisconnectTip(CValidationState& state, const CChainParams& chainpara
         if (!VoteStep(state, pindexDelete, true, view))
             return error("DisconnectTip(): VoteStep failed");
         assert(view.Flush());
-        if (LogAcceptCategory("statehash"))
+        if (GetBoolArg("-debugstatehash", false))
             statehash = GetDAOStateHash(view, pindexDelete->pprev->nCFLocked, pindexDelete->pprev->nCFSupply);
     }
     LogPrint("bench", "- Disconnect block: %.2fms\n", (GetTimeMicros() - nStart) * 0.001);
@@ -5081,7 +5078,7 @@ bool static ConnectTip(CValidationState& state, const CChainParams& chainparams,
         if (!VoteStep(state, pindexNew, false, view))
             return error("ConnectTip(): VoteStep failed");
         nTime4 = GetTimeMicros(); nTimeConnectTotal += nTime4 - nTime3;
-        if (LogAcceptCategory("statehash"))
+        if (GetBoolArg("-debugstatehash", false))
             statehash = GetDAOStateHash(view, pindexNew->nCFLocked, pindexNew->nCFSupply);
         assert(view.Flush());
     }
@@ -5645,7 +5642,7 @@ bool CheckBlockHeader(const CBlockHeader& block, CValidationState& state, const 
     return true;
 }
 
-bool CheckBlock(const CBlock& block, CValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW, bool fCheckMerkleRoot, bool fCheckSig)
+bool CheckBlock(const CBlock& block, CValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW, bool fCheckMerkleRoot, bool fCheckSig, bool fScriptChecks)
 {
     // These are checks that are independent of context.
     if (block.fChecked)
@@ -5700,7 +5697,7 @@ bool CheckBlock(const CBlock& block, CValidationState& state, const Consensus::P
             return state.DoS(100, false, REJECT_INVALID, "bad-cb-multiple", false, "more than one coinbase");
 
     // Check proof-of-stake block signature
-    if (fCheckSig && !CheckBlockSignature(block))
+    if (fCheckSig && fScriptChecks && !CheckBlockSignature(block))
     {
         return error("CheckBlock() : bad proof-of-stake block signature");
     }
@@ -7754,19 +7751,19 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv, 
 
         if(pfrom->nVersion < 70015)
         {
-            reason = "You are using an old version of NavCoin, please update.";
+            reason = "You are using an old version of Navcoin, please update.";
             fObsolete = true;
         }
 
         if(pfrom->nVersion < 70017 && IsWitnessEnabled(chainActive.Tip(), Params().GetConsensus()))
         {
-            reason = "Segregated Witness has been enabled and you are using an old version of NavCoin, please update.";
+            reason = "Segregated Witness has been enabled and you are using an old version of Navcoin, please update.";
             fObsolete = true;
         }
 
         if(pfrom->nVersion < 70020 && IsCommunityFundEnabled(chainActive.Tip(), Params().GetConsensus()))
         {
-            reason = "Community Fund has been enabled and you are using an old version of NavCoin, please update.";
+            reason = "Community Fund has been enabled and you are using an old version of Navcoin, please update.";
             fObsolete = true;
         }
 
