@@ -1,4 +1,4 @@
-// Copyright (c) 2019 The NavCoin Core developers
+// Copyright (c) 2019-2020 The NavCoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -205,6 +205,9 @@ void DaoConsultationCreate::onCreate()
     if (fRange)
         nVersion |= CConsultation::ANSWER_IS_A_RANGE_VERSION;
 
+    if (IsExcludeEnabled(chainActive.Tip(), Params().GetConsensus()))
+        nVersion |= CConsultation::EXCLUDE_VERSION;
+
     if (moreAnswersBox->isChecked())
     {
         if (!fRange)
@@ -278,14 +281,16 @@ void DaoConsultationCreate::onCreate()
     CRecipient recipient = {scriptPubKey, nValue, fSubtractFeeFromAmount};
     vecSend.push_back(recipient);
 
+    std::vector<shared_ptr<CReserveBLSCTBlindingKey>> reserveBLSCTKey;
+
     bool created = true;
 
-    if (!pwalletMain->CreateTransaction(vecSend, wtx, reservekey, nFeeRequired, nChangePosRet, strError, NULL, true)) {
+    if (!pwalletMain->CreateTransaction(vecSend, wtx, reservekey, reserveBLSCTKey, nFeeRequired, nChangePosRet, strError, false, NULL, true)) {
         if (!fSubtractFeeFromAmount && nValue + nFeeRequired > pwalletMain->GetBalance()) {
             created = false;
         }
     }
-    if (!pwalletMain->CommitTransaction(wtx, reservekey)) {
+    if (!pwalletMain->CommitTransaction(wtx, reservekey, reserveBLSCTKey)) {
         created = false;
     }
 
@@ -302,7 +307,7 @@ void DaoConsultationCreate::onCreate()
             else {
                 CConsultation consultation;
                 std::vector<CConsultationAnswer> vAnswers;
-                if (TxToConsultation(wtx.strDZeel, wtx.GetHash(), uint256(), consultation, vAnswers))
+                if (TxToConsultation(wtx.strDZeel, wtx.GetHash(), uint256(), chainActive.Tip(), consultation, vAnswers))
                 {
                     for (auto &it: vAnswers)
                     {
@@ -373,6 +378,9 @@ void DaoConsultationCreate::onCreateConsensus()
     UniValue strDZeel(UniValue::VOBJ);
     uint64_t nVersion = CConsultation::BASE_VERSION | CConsultation::MORE_ANSWERS_VERSION | CConsultation::CONSENSUS_PARAMETER_VERSION;
 
+    if (IsExcludeEnabled(chainActive.Tip(), Params().GetConsensus()))
+        nVersion |= CConsultation::EXCLUDE_VERSION;
+
     if (listAnswers.size() < 1)
     {
         showWarning("You need to indicate at least one possible answer.");
@@ -441,14 +449,16 @@ void DaoConsultationCreate::onCreateConsensus()
     CRecipient recipient = {scriptPubKey, nValue, fSubtractFeeFromAmount};
     vecSend.push_back(recipient);
 
+    std::vector<shared_ptr<CReserveBLSCTBlindingKey>> reserveBLSCTKey;
+
     bool created = true;
 
-    if (!pwalletMain->CreateTransaction(vecSend, wtx, reservekey, nFeeRequired, nChangePosRet, strError, NULL, true)) {
+    if (!pwalletMain->CreateTransaction(vecSend, wtx, reservekey, reserveBLSCTKey, nFeeRequired, nChangePosRet, strError, false, NULL, true)) {
         if (!fSubtractFeeFromAmount && nValue + nFeeRequired > pwalletMain->GetBalance()) {
             created = false;
         }
     }
-    if (!pwalletMain->CommitTransaction(wtx, reservekey)) {
+    if (!pwalletMain->CommitTransaction(wtx, reservekey, reserveBLSCTKey)) {
         created = false;
     }
 
@@ -462,7 +472,7 @@ void DaoConsultationCreate::onCreateConsensus()
             bool duplicate;
             CConsultation consultation;
             std::vector<CConsultationAnswer> vAnswers;
-            if (TxToConsultation(wtx.strDZeel, wtx.GetHash(), uint256(), consultation, vAnswers))
+            if (TxToConsultation(wtx.strDZeel, wtx.GetHash(), uint256(), chainActive.Tip(), consultation, vAnswers))
             {
                 for (auto &it: vAnswers)
                 {

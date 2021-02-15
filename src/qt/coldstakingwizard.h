@@ -8,6 +8,7 @@
 #include <qt/guiconstants.h>
 #include <qt/guiutil.h>
 #include <qt/receiverequestdialog.h>
+#include <base58.h>
 
 #include <QGridLayout>
 #include <QLabel>
@@ -53,10 +54,12 @@ public:
 private:
     QLabel *spendingAddressLabel;
     QLabel *stakingAddressLabel;
+    QLabel *votingAddressLabel;
     QLabel *descriptionLabel;
     QLabel *errorLabel;
     QLineEdit *spendingAddressLineEdit;
     QLineEdit *stakingAddressLineEdit;
+    QLineEdit *votingAddressLineEdit;
 };
 
 class ColdStakingAddressPage : public QWizardPage

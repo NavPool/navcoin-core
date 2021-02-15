@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2015 The Bitcoin Core developers
-// Copyright (c) 2018 The NavCoin developers
+// Copyright (c) 2018-2020 The NavCoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -191,6 +191,7 @@ private:
     void addPriorityTxs(bool fProofOfStake, int blockTime);
     /** Add transactions based on feerate including unconfirmed ancestors */
     void addPackageTxs();
+    void addCombinedBLSCT(const CStateViewCache& inputs);
 
     // helper function for addPriorityTxs
     /** Test if tx will still "fit" in the block */
@@ -223,10 +224,10 @@ void IncrementExtraNonce(CBlock* pblock, const CBlockIndex* pindexPrev, unsigned
 int64_t UpdateTime(CBlockHeader* pblock, const Consensus::Params& consensusParams, const CBlockIndex* pindexPrev);
 
 // NAVCoin - Mining/Staking thread
-bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParams& chainparams);
+bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParams& chainparams, std::string sLog);
 
 /** Add cfund votes to the coinbase */
-void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& chainparams, CKey key, CBlockIndex* pindexPrev);
+void ApplyCommunityFundToCoinBase(CTransaction &coinbaseTx, const CChainParams& chainparams, CKey key, CBlockIndex* pindexPrev, std::string sLog);
 
 /** Check mined proof-of-stake block */
 bool CheckStake(CBlock* pblock, CWallet& wallet, const CChainParams& chainparams);

@@ -1,4 +1,4 @@
-// Copyright (c) 2019 The NavCoin Core developers
+// Copyright (c) 2019-2020 The NavCoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -27,6 +27,7 @@ static QMap<QString, QString> teamAddresses = {{"NN5QSSMAdtRU35BffLZUw9vChnhHKKM
                                                {"NPAxaKnCb7ukrUvFmntSyZWcZgbrGHUeC4", "Craig proletesseract - Core Dev"},
                                                {"NRXfZ1egFxMSUsc4Ufpi4Lm7DdXStYmeBG", "mxaddict - Core Dev"},
                                                {"NcPw2tTTEgfrCGD53TwxRbkfG8oniyED1o", "salmonskinroll - Core Tester"},
+                                               {"XinrZWZvvp7QAizF8CREuVbA5LKDzB5bMgeK7uM3YdYgeYsniYFcyuinJzs8N", "0x2830 - Privacy Dev"},
                                                {"3HnzbJ4TR9", "Community Fund"},
                                                {"XVPMwBdNU9ou3a3TnwaVgAgEecbdsEVZHbVmeY4TMAHbY6BdtY8xW6m1Q1rkb", "Core Dev Bounty"},
                                                {"XAznGHuQ35hvgSGsVWi5Nu2Y6n3rT4cycE3yfZWCfnNjycCGdGAEnta2G24Mi", "Web Dev Bounty"},

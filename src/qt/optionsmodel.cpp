@@ -22,7 +22,6 @@
 #include <wallet/walletdb.h>
 #endif
 
-#include <QNetworkProxy>
 #include <QSettings>
 #include <QStringList>
 
@@ -270,7 +269,7 @@ bool OptionsModel::setData(const QModelIndex & index, const QVariant & value, in
         case HideTrayIcon:
             fHideTrayIcon = value.toBool();
             settings.setValue("fHideTrayIcon", fHideTrayIcon);
-    		Q_EMIT hideTrayIconChanged(fHideTrayIcon);
+            Q_EMIT hideTrayIconChanged(fHideTrayIcon);
             break;
         case MinimizeToTray:
             fMinimizeToTray = value.toBool();
@@ -441,24 +440,6 @@ void OptionsModel::setCoinControlFeatures(const bool enabled)
     Q_EMIT coinControlFeaturesChanged(fCoinControlFeatures);
 }
 
-bool OptionsModel::getProxySettings(QNetworkProxy& proxy) const
-{
-    // Directly query current base proxy, because
-    // GUI settings can be overridden with -proxy.
-    proxyType curProxy;
-    if (GetProxy(NET_IPV4, curProxy)) {
-        proxy.setType(QNetworkProxy::Socks5Proxy);
-        proxy.setHostName(QString::fromStdString(curProxy.proxy.ToStringIP()));
-        proxy.setPort(curProxy.proxy.GetPort());
-
-        return true;
-    }
-    else
-        proxy.setType(QNetworkProxy::NoProxy);
-
-    return false;
-}
-
 void OptionsModel::setRestartRequired(bool fRequired)
 {
     QSettings settings;
@@ -469,6 +450,16 @@ bool OptionsModel::isRestartRequired()
 {
     QSettings settings;
     return settings.value("fRestartRequired", false).toBool();
+}
+
+void OptionsModel::setDirty(bool dirty)
+{
+    fDirty = dirty;
+}
+
+bool OptionsModel::isDirty()
+{
+    return fDirty;
 }
 
 void OptionsModel::checkAndMigrate()

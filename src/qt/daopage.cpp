@@ -1,4 +1,4 @@
-// Copyright (c) 2019 The NavCoin Core developers
+// Copyright (c) 2019-2020 The NavCoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -561,6 +561,7 @@ void DaoPage::initialize(CProposalMap proposalMap, CPaymentRequestMap paymentReq
             break;
         }
         case DAOFlags::EXPIRED:
+        case DAOFlags::ACCEPTED_EXPIRED:
         {
             p.color = "#ff6600";
             break;
@@ -1723,7 +1724,7 @@ void DaoPage::onDetails() {
             type = "payment-request";
         else if (nCurrentView == VIEW_CONSULTATIONS)
             type = "consultation";
-        QString link = "https://www.navexplorer.com/community-fund/" + type + "/" + contextHash;
+        QString link = "https://www.navexplorer.com/dao/" + type + "/" + contextHash;
         QDesktopServices::openUrl(QUrl(link));
     }
 }

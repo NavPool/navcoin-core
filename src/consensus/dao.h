@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2019 The NavCoin Core developers
+// Copyright (c) 2018-2020 The NavCoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -164,6 +164,12 @@ public:
         std::swap(to.list, list);
     }
 
+    int GetLastVoteHeight() {
+        if (list.empty())
+            return 0;
+        return list.rbegin()->first;
+    }
+
     ADD_SERIALIZE_METHODS;
 
     template <typename Stream, typename Operation>
@@ -270,7 +276,8 @@ public:
     static const uint64_t BASE_VERSION=1<<1;
     static const uint64_t REDUCED_QUORUM_VERSION=1<<2;
     static const uint64_t ABSTAIN_VOTE_VERSION=1<<3;
-    static const uint64_t ALL_VERSION = 1 | BASE_VERSION | REDUCED_QUORUM_VERSION | ABSTAIN_VOTE_VERSION;
+    static const uint64_t EXCLUDE_VERSION=1<<4;
+    static const uint64_t ALL_VERSION = 1 | BASE_VERSION | REDUCED_QUORUM_VERSION | ABSTAIN_VOTE_VERSION | EXCLUDE_VERSION;
 
     CAmount nAmount;
     std::map<uint256, flags> mapState;
@@ -280,6 +287,7 @@ public:
     int nVotesYes;
     int nVotesNo;
     int nVotesAbs;
+    int nExclude;
     string strDZeel;
     int nVersion;
     unsigned int nVotingCycle;
@@ -293,6 +301,7 @@ public:
         nVotesYes = 0;
         nVotesNo = 0;
         nVotesAbs = 0;
+        nExclude = 0;
         hash = uint256();
         txblockhash = uint256();
         proposalhash = uint256();
@@ -311,6 +320,7 @@ public:
         std::swap(to.nVotesYes, nVotesYes);
         std::swap(to.nVotesNo, nVotesNo);
         std::swap(to.nVotesAbs, nVotesAbs);
+        std::swap(to.nExclude, nExclude);
         std::swap(to.strDZeel, strDZeel);
         std::swap(to.nVersion, nVersion);
         std::swap(to.nVotingCycle, nVotingCycle);
@@ -332,6 +342,7 @@ public:
                 && nVotesYes == b.nVotesYes
                 && nVotesNo == b.nVotesNo
                 && nVotesAbs == b.nVotesAbs
+                && nExclude == b.nExclude
                 && strDZeel == b.strDZeel
                 && nVersion == b.nVersion
                 && nVotingCycle == b.nVotingCycle;
@@ -372,7 +383,7 @@ public:
     }
 
     bool IsNull() const {
-        return (nAmount == 0 && nVotesYes == 0 && nVotesNo == 0 && strDZeel == "" && mapState.size() == 0);
+        return (nAmount == 0 && nVotesYes == 0 && nVotesNo == 0 && nExclude == 0 && strDZeel == "" && mapState.size() == 0);
     }
 
     std::string GetState(const CStateViewCache& view) const {
@@ -381,17 +392,17 @@ public:
         if(IsAccepted(view)) {
             sFlags = "accepted";
             if(fState != DAOFlags::ACCEPTED)
-                sFlags += " waiting for end of voting period";
+                sFlags = "pending";
         }
         if(IsRejected(view)) {
             sFlags = "rejected";
             if(fState != DAOFlags::REJECTED)
-                sFlags += " waiting for end of voting period";
+                sFlags = "pending";
         }
         if(IsExpired(view)) {
             sFlags = "expired";
             if(fState != DAOFlags::EXPIRED)
-                sFlags += " waiting for end of voting period";
+                sFlags = "pending";
         }
         if (fState == PAID)
             sFlags = "paid";
@@ -456,6 +467,9 @@ public:
 
         if(this->nVersion & ABSTAIN_VOTE_VERSION)
            READWRITE(nVotesAbs);
+
+        if(this->nVersion & EXCLUDE_VERSION)
+            READWRITE(nExclude);
     }
 
 };
@@ -467,7 +481,8 @@ public:
     static const uint64_t REDUCED_QUORUM_VERSION=1<<2;
     static const uint64_t ABSTAIN_VOTE_VERSION=1<<3;
     static const uint64_t PAYMENT_ADDRESS_VERSION=1<<4;
-    static const uint64_t ALL_VERSION = 1 | BASE_VERSION | REDUCED_QUORUM_VERSION | ABSTAIN_VOTE_VERSION | PAYMENT_ADDRESS_VERSION;
+    static const uint64_t EXCLUDE_VERSION=1<<5;
+    static const uint64_t ALL_VERSION = 1 | BASE_VERSION | REDUCED_QUORUM_VERSION | ABSTAIN_VOTE_VERSION | PAYMENT_ADDRESS_VERSION | EXCLUDE_VERSION;
 
     CAmount nAmount;
     CAmount nFee;
@@ -478,6 +493,7 @@ public:
     int nVotesYes;
     int nVotesNo;
     int nVotesAbs;
+    int nExclude;
     std::string strDZeel;
     uint256 hash;
     uint256 txblockhash;
@@ -496,6 +512,7 @@ public:
         nVotesYes = 0;
         nVotesNo = 0;
         nVotesAbs = 0;
+        nExclude = 0;
         nDeadline = 0;
         strDZeel = "";
         hash = uint256();
@@ -514,6 +531,7 @@ public:
         std::swap(to.nVotesYes, nVotesYes);
         std::swap(to.nVotesNo, nVotesNo);
         std::swap(to.nVotesAbs, nVotesAbs);
+        std::swap(to.nExclude, nExclude);
         std::swap(to.strDZeel, strDZeel);
         std::swap(to.hash, hash);
         std::swap(to.txblockhash, txblockhash);
@@ -538,6 +556,7 @@ public:
                 && nVotesYes == b.nVotesYes
                 && nVotesNo == b.nVotesNo
                 && nVotesAbs == b.nVotesAbs
+                && nExclude == b.nExclude
                 && strDZeel == b.strDZeel
                 && hash == b.hash
                 && txblockhash == b.txblockhash
@@ -594,7 +613,7 @@ public:
 
     bool IsNull() const {
         return (nAmount == 0 && nFee == 0 && ownerAddress == "" && paymentAddress == "" &&
-                nVotesYes == 0 && nVotesNo == 0 && nDeadline == 0 && strDZeel == "" && mapState.size() == 0);
+                nVotesYes == 0 && nVotesNo == 0 && nExclude == 0 && nDeadline == 0 && strDZeel == "" && mapState.size() == 0);
     }
 
     std::string ToString(CStateViewCache& coins, uint32_t currentTime = 0) const;
@@ -675,6 +694,10 @@ public:
         if(this->nVersion & PAYMENT_ADDRESS_VERSION) {
             READWRITE(paymentAddress);
         }
+
+        if (this->nVersion & EXCLUDE_VERSION) {
+            READWRITE(nExclude);
+        }
     }
 };
 
@@ -685,12 +708,14 @@ class CConsultationAnswer
 {
 public:
     static const uint64_t BASE_VERSION=1;
-    static const uint64_t ALL_VERSION =BASE_VERSION;
+    static const uint64_t EXCLUDE_VERSION=1<<1;
+    static const uint64_t ALL_VERSION = BASE_VERSION|EXCLUDE_VERSION;
 
     int nVersion;
     std::string sAnswer;
     int nVotes;
     int nSupport;
+    int nExclude;
     std::map<uint256, flags> mapState;
     uint256 hash;
     uint256 parent;
@@ -704,6 +729,7 @@ public:
         std::swap(to.nVersion, nVersion);
         std::swap(to.sAnswer, sAnswer);
         std::swap(to.nVotes, nVotes);
+        std::swap(to.nExclude, nExclude);
         std::swap(to.nSupport, nSupport);
         std::swap(to.mapState, mapState);
         std::swap(to.fDirty, fDirty);
@@ -746,6 +772,7 @@ public:
         return nVersion == b.nVersion
                 && sAnswer == b.sAnswer
                 && nVotes == b.nVotes
+                && nExclude == b.nExclude
                 && nSupport == b.nSupport
                 && mapState == b.mapState
                 && hash == b.hash
@@ -760,7 +787,7 @@ public:
 
     bool IsNull() const
     {
-        return (sAnswer == "" && nVotes == 0 && nSupport == 0 && nVersion == 0 && mapState.size() == 0 &&
+        return (sAnswer == "" && nVotes == 0 && nSupport == 0 && nVersion == 0 && mapState.size() == 0 && nExclude == 0 &&
                 hash == uint256() && txhash == uint256() && parent == uint256() && txblockhash == uint256());
     };
 
@@ -768,6 +795,7 @@ public:
     {
         sAnswer = "";
         nVotes = 0;
+        nExclude = 0;
         mapState.clear();
         nVersion = 0;
         nSupport = 0;
@@ -814,6 +842,10 @@ public:
         READWRITE(parent);
         READWRITE(txblockhash);
         READWRITE(txhash);
+        if (this->nVersion & EXCLUDE_VERSION)
+        {
+            READWRITE(nExclude);
+        }
     }
 };
 
@@ -824,7 +856,8 @@ public:
     static const uint64_t ANSWER_IS_A_RANGE_VERSION = 1<<1;
     static const uint64_t MORE_ANSWERS_VERSION  = 1<<2;
     static const uint64_t CONSENSUS_PARAMETER_VERSION  = 1<<3;
-    static const uint64_t ALL_VERSION = BASE_VERSION | ANSWER_IS_A_RANGE_VERSION | MORE_ANSWERS_VERSION | CONSENSUS_PARAMETER_VERSION;
+    static const uint64_t EXCLUDE_VERSION  = 1<<4;
+    static const uint64_t ALL_VERSION = BASE_VERSION | ANSWER_IS_A_RANGE_VERSION | MORE_ANSWERS_VERSION | CONSENSUS_PARAMETER_VERSION | EXCLUDE_VERSION;
 
     std::map<uint256, flags> mapState;
     uint256 hash;
@@ -838,6 +871,7 @@ public:
     uint64_t nMax;
     map<uint64_t, uint64_t> mapVotes;
     std::vector<uint256> vAnswers;
+    int nExclude;
 
     CConsultation() { SetNull(); }
 
@@ -854,12 +888,13 @@ public:
         std::swap(to.nMax, nMax);
         std::swap(to.mapVotes, mapVotes);
         std::swap(to.vAnswers, vAnswers);
+        std::swap(to.nExclude, nExclude);
     };
 
     bool IsNull() const {
         return (hash == uint256() && txblockhash == uint256() && mapState.size() == 0
                 && nVersion == 0 && nVotingCycle == 0 && strDZeel == "" && nSupport == 0
-                && nMin == 0 && nMax == 0 && vAnswers.size() == 0);
+                && nMin == 0 && nMax == 0 && vAnswers.size() == 0 && nExclude == 0);
     };
 
     void SetNull() {
@@ -873,6 +908,7 @@ public:
         nSupport = 0;
         nMin = 0;
         nMax = 0;
+        nExclude = 0;
         mapVotes.clear();
         vAnswers.clear();
     };
@@ -951,6 +987,7 @@ public:
                 && nVotingCycle == b.nVotingCycle
                 && nMin == b.nMin
                 && nMax == b.nMax
+                && nExclude == b.nExclude
                 && vAnswers == vAnswers;
     }
 
@@ -1001,6 +1038,11 @@ public:
         READWRITE(txblockhash);
         READWRITE(mapVotes);
         READWRITE(vAnswers);
+
+        if (this->nVersion & EXCLUDE_VERSION)
+        {
+            READWRITE(nExclude);
+        }
     }
 };
 

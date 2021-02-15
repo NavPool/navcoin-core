@@ -2,28 +2,30 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "walletview.h"
+#include <qt/walletview.h>
 
-#include "addressbookpage.h"
-#include "askpassphrasedialog.h"
-#include "navcoingui.h"
-#include "clientmodel.h"
-#include "guiutil.h"
-#include "optionsmodel.h"
-#include "overviewpage.h"
-#include "daopage.h"
-#include "platformstyle.h"
-#include "getaddresstoreceive.h"
-#include "receivecoinsdialog.h"
-#include "sendcoinsdialog.h"
-#include "signverifymessagedialog.h"
-#include "transactiontablemodel.h"
-#include "transactionview.h"
-#include "walletmodel.h"
+#include <qt/addressbookpage.h>
+#include <qt/askpassphrasedialog.h>
+#include <qt/clientmodel.h>
+#include <qt/communityfundpage.h>
+#include <qt/daopage.h>
+#include <qt/getaddresstoreceive.h>
+#include <qt/guiutil.h>
+#include <qt/navcoingui.h>
+#include <qt/optionsdialog.h>
+#include <qt/optionsmodel.h>
+#include <qt/overviewpage.h>
+#include <qt/platformstyle.h>
+#include <qt/receivecoinsdialog.h>
+#include <qt/sendcoinsdialog.h>
+#include <qt/signverifymessagedialog.h>
+#include <qt/transactiontablemodel.h>
+#include <qt/transactionview.h>
+#include <qt/walletmodel.h>
 
-#include "ui_interface.h"
+#include <ui_interface.h>
 
-#include "main.h"
+#include <main.h>
 
 #include <QAction>
 #include <QActionGroup>
@@ -42,6 +44,8 @@ WalletView::WalletView(const PlatformStyle *platformStyle, QWidget *parent):
 {
     // Create tabs
     overviewPage = new OverviewPage(platformStyle);
+
+    settingsPage = new OptionsDialog(platformStyle);
 
     transactionsPage = new QWidget(this);
     QVBoxLayout *vbox = new QVBoxLayout();
@@ -66,6 +70,7 @@ WalletView::WalletView(const PlatformStyle *platformStyle, QWidget *parent):
     usedReceivingAddressesPage = new AddressBookPage(platformStyle, AddressBookPage::ForEditing, AddressBookPage::ReceivingTab, this);
 
     addWidget(overviewPage);
+    addWidget(settingsPage);
     addWidget(transactionsPage);
     addWidget(receiveCoinsPage);
     addWidget(sendCoinsPage);
@@ -111,6 +116,9 @@ void WalletView::setNavCoinGUI(NavCoinGUI *gui)
         // Pass through encryption status changed signals
         connect(this, SIGNAL(encryptionStatusChanged(int)), gui, SLOT(setEncryptionStatus(int)));
 
+        // Pass through encryption status changed signals
+        connect(this, SIGNAL(encryptionTxStatusChanged(bool)), gui, SLOT(setEncryptionTxStatus(bool)));
+
         // Pass through transaction notifications
         connect(this, SIGNAL(incomingTransaction(QString,int,CAmount,QString,QString,QString)), gui, SLOT(incomingTransaction(QString,int,CAmount,QString,QString,QString)));
     }
@@ -123,6 +131,8 @@ void WalletView::setClientModel(ClientModel *clientModel)
     overviewPage->setClientModel(clientModel);
     sendCoinsPage->setClientModel(clientModel);
     daoPage->setClientModel(clientModel);
+
+    settingsPage->setModel(clientModel->getOptionsModel());
 }
 
 void WalletView::requestAddressHistory()
@@ -140,7 +150,7 @@ void WalletView::setWalletModel(WalletModel *walletModel)
     daoPage->setWalletModel(walletModel);
     receiveCoinsPage->setModel(walletModel);
     requestPaymentPage->setModel(walletModel);
-    requestPaymentPage->showQR();
+    requestPaymentPage->showPrivateAddress(0);
     sendCoinsPage->setModel(walletModel);
     usedReceivingAddressesPage->setModel(walletModel->getAddressTableModel());
     usedSendingAddressesPage->setModel(walletModel->getAddressTableModel());
@@ -154,6 +164,10 @@ void WalletView::setWalletModel(WalletModel *walletModel)
         connect(walletModel, SIGNAL(encryptionStatusChanged(int)), this, SIGNAL(encryptionStatusChanged(int)));
         updateEncryptionStatus();
 
+        // Handle changes in encryption status
+        connect(walletModel, SIGNAL(encryptionTxStatusChanged(bool)), this, SIGNAL(encryptionTxStatusChanged(bool)));
+        updateEncryptionTxStatus();
+
         // Balloon pop-up for new transaction
         connect(walletModel->getTransactionTableModel(), SIGNAL(rowsInserted(QModelIndex,int,int)),
                 this, SLOT(processNewTransaction(QModelIndex,int,int)));
@@ -163,6 +177,48 @@ void WalletView::setWalletModel(WalletModel *walletModel)
 
         // Show progress dialog
         connect(walletModel, SIGNAL(showProgress(QString,int)), this, SLOT(showProgress(QString,int)));
+
+        if (walletModel->NeedsBLSCTGeneration())
+        {
+            GenerateBLSCT();
+        }
+    }    
+}
+
+void WalletView::GenerateBLSCT()
+{
+    if(!walletModel)
+        return;
+
+    QMessageBox::information(this, tr("Generation of xNAV keys"),
+        tr("In order to generate your xNAV keys, you will be asked to unlock your wallet"));
+
+    bool fShouldLockAfter = false;
+
+    // Unlock wallet when requested by wallet model
+    if (walletModel->getEncryptionStatus() == WalletModel::Locked)
+    {
+        AskPassphraseDialog dlg(AskPassphraseDialog::Unlock, this);
+        dlg.setModel(walletModel);
+        dlg.exec();
+
+        fShouldLockAfter = true;
+    }
+
+    if (!walletModel->GenerateBLSCT())
+    {
+        QMessageBox::information(this, tr("Generation of xNAV keys"),
+            tr("xNAV keys could not be generated."));
+    }
+    else
+    {
+        QMessageBox::information(this, tr("Generation of xNAV keys"),
+            tr("xNAV keys have been generated."));
+    }
+
+    if (fShouldLockAfter)
+    {
+        walletModel->setWalletLocked(true);
     }
 }
 
@@ -199,6 +255,17 @@ void WalletView::gotoHistoryPage()
     daoPage->setActive(false);
 }
 
+void WalletView::gotoSettingsPage()
+{
+    // We need to update the settings if it was modified externally
+    // This fixes a bug where coin control was enabled on the send page
+    // but was not shown as enabled on the setting spage
+    settingsPage->setModel(this->clientModel->getOptionsModel());
+
+    setCurrentWidget(settingsPage);
+    daoPage->setActive(false);
+}
+
 void WalletView::gotoCommunityFundPage()
 {
     // Change to CommunityFund UI
@@ -213,6 +280,7 @@ void WalletView::gotoReceiveCoinsPage()
 }
 
 void WalletView::gotoRequestPaymentPage(){
+    requestPaymentPage->showPrivateAddress(0);
     setCurrentWidget(requestPaymentPage);
     daoPage->setActive(false);
 }
@@ -263,6 +331,11 @@ void WalletView::updateEncryptionStatus()
     Q_EMIT encryptionStatusChanged(walletModel->getEncryptionStatus());
 }
 
+void WalletView::updateEncryptionTxStatus()
+{
+    Q_EMIT encryptionTxStatusChanged(walletModel->getEncryptionTxStatus());
+}
+
 void WalletView::encryptWallet(bool status)
 {
     if(!walletModel)
@@ -272,6 +345,17 @@ void WalletView::encryptWallet(bool status)
     dlg.exec();
 
     updateEncryptionStatus();
+}
+
+void WalletView::encryptTx()
+{
+    if(!walletModel)
+        return;
+    AskPassphraseDialog dlg(AskPassphraseDialog::EncryptTx, this);
+    dlg.setModel(walletModel);
+    dlg.exec();
+
+    updateEncryptionTxStatus();
 }
 
 void WalletView::backupWallet()
@@ -540,6 +624,16 @@ void WalletView::showProgress(const QString &title, int nProgress)
         progressDialog->setCancelButton(0);
         progressDialog->setAutoClose(false);
         progressDialog->setValue(0);
+        progressDialog->setRange(0,100);
+    }
+    else if (nProgress == -1)
+    {
+        progressDialog = new QProgressDialog(title, "", 0, 100);
+        progressDialog->setWindowModality(Qt::ApplicationModal);
+        progressDialog->setMinimumDuration(0);
+        progressDialog->setCancelButton(0);
+        progressDialog->setAutoClose(false);
+        progressDialog->setRange(0,0);
     }
     else if (nProgress == 100)
     {

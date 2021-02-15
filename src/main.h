@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2015 The Bitcoin Core developers
-// Copyright (c) 2018 The NavCoin Core developers
+// Copyright (c) 2018-2020 The NavCoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -12,6 +12,7 @@
 #endif
 
 #include <amount.h>
+#include <blsct/verification.h>
 #include <chain.h>
 #include <coins.h>
 #include <net.h>
@@ -68,7 +69,7 @@ static const bool DEFAULT_WHITELISTFORCERELAY = true;
 /** Default for -minrelaytxfee, minimum relay fee for transactions */
 static const unsigned int DEFAULT_MIN_RELAY_TX_FEE = 1000;
 //! -maxtxfee default
-static const CAmount DEFAULT_TRANSACTION_MAXFEE = 0.1 * COIN;
+static const CAmount DEFAULT_TRANSACTION_MAXFEE = 1000.0 * COIN;
 //! Discourage users to set fees higher than this amount (in satoshis) per kB
 static const CAmount HIGH_TX_FEE_PER_KB = 0.01 * COIN;
 //! -maxtxfee will warn if called with a higher fee than this amount (in satoshis)
@@ -350,8 +351,10 @@ void FlushStateToDiskIfNeeded();
 /** Prune block files and flush state to disk. */
 void PruneAndFlush();
 
+bool RemoveBLSCTConflicting(CTxMemPool& pool, const CTxIn& txin, CCriticalSection* mpcs, CCriticalSection* spcs);
+
 /** (try to) add transaction to memory pool **/
-bool AcceptToMemoryPool(CTxMemPool& pool, CValidationState &state, const CTransaction &tx, bool fLimitFree,
+bool AcceptToMemoryPool(CTxMemPool& pool, CCriticalSection *mpcs, CCriticalSection *spcs, CValidationState &state, const CTransaction &tx, bool fLimitFree,
                         bool* pfMissingInputs, bool fOverrideMempoolLimit=false, const CAmount nAbsurdFee=0);
 
 /** Convert CValidationState to a human-readable message for logging */
@@ -398,7 +401,7 @@ int64_t GetTransactionSigOpCost(const CTransaction& tx, const CStateViewCache& i
  * instead of being performed inline.
  */
 bool CheckInputs(const CTransaction& tx, CValidationState &state, const CStateViewCache &view, bool fScriptChecks,
-                 unsigned int flags, bool cacheStore, PrecomputedTransactionData& txdata, std::vector<CScriptCheck> *pvChecks = NULL);
+                 unsigned int flags, bool cacheStore, std::vector<RangeproofEncodedData>& blsctData, PrecomputedTransactionData& txdata, std::vector<CScriptCheck> *pvChecks = NULL, CAmount allowedInPrivate = 0);
 
 /** Apply the effects of this transaction on the UTXO set represented by view */
 void UpdateCoins(const CTransaction& tx, CStateViewCache& inputs, int nHeight);
@@ -489,6 +492,9 @@ bool HashOnchainActive(const uint256 &hash);
 bool GetAddressIndex(uint160 addressHash, int type,
                      std::vector<std::pair<CAddressIndexKey, CAmount> > &addressIndex,
                      int start = 0, int end = 0);
+bool GetAddressHistory(uint160 addressHash, uint160 addressHash2,
+                     std::vector<std::pair<CAddressHistoryKey, CAddressHistoryValue> > &addressHistory,
+                     AddressHistoryFilter filter = AddressHistoryFilter::ALL, int start = 0, int end = 0);
 bool GetAddressUnspent(uint160 addressHash, int type,
                        std::vector<std::pair<CAddressUnspentKey, CAddressUnspentValue> > &unspentOutputs);
 
@@ -513,7 +519,8 @@ bool ContextualCheckBlock(const CBlock& block, CValidationState& state, CBlockIn
  *  Validity checks that depend on the UTXO set are also done; ConnectBlock()
  *  can fail if those validity checks fail (among other reasons). */
 bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pindex, CStateViewCache& coins,
-                  const CChainParams& chainparams, bool fJustCheck = false, bool fProofOfStake = false);
+                  const CChainParams& chainparams, std::map<int, std::vector<RangeproofEncodedData>>& blsctData,
+                  bool fJustCheck = false, bool fProofOfStake = false);
 
 /** Undo the effects of this block (with given index) on the UTXO set represented by coins.
  *  In case pfClean is provided, operation will try to be tolerant about errors, and *pfClean
@@ -546,11 +553,14 @@ bool IsStaticRewardLocked(const CBlockIndex* pindexPrev, const Consensus::Params
 bool IsNtpSyncEnabled(const CBlockIndex* pindexPrev, const Consensus::Params& params);
 
 bool IsReducedCFundQuorumEnabled(const CBlockIndex* pindexPrev, const Consensus::Params& params);
+bool IsBLSCTEnabled(const CBlockIndex* pindexPrev, const Consensus::Params& params);
 
 /** Check whether ColdStaking has been activated. */
 bool IsColdStakingEnabled(const CBlockIndex* pindexPrev, const Consensus::Params& params);
 bool IsColdStakingv2Enabled(const CBlockIndex* pindexPrev, const Consensus::Params& params);
 bool IsColdStakingPoolFeeEnabled(const CBlockIndex* pindexPrev, const Consensus::Params& params);
+
+bool IsExcludeEnabled(const CBlockIndex* pindexPrev, const Consensus::Params& params);
 
 /** When there are blocks in the active chain with missing data, rewind the chainstate and remove them from the block index */
 bool RewindBlockIndex(const CChainParams& params);
@@ -666,7 +676,7 @@ bool IsSigHFEnabled(const Consensus::Params &consensus, const CBlockIndex *pinde
 
 bool TxToProposal(std::string strDZeel, uint256 hash, const uint256& blockhash, const CAmount& nProposalFee, CProposal& proposal);
 bool TxToPaymentRequest(std::string strDZeel, uint256 hash, const uint256& blockhash, CPaymentRequest& prequest);
-bool TxToConsultation(std::string strDZeel, uint256 hash, const uint256& blockhash, CConsultation& consultation, std::vector<CConsultationAnswer>& answers);
+bool TxToConsultation(std::string strDZeel, uint256 hash, const uint256& blockhash, CBlockIndex* pindexPrev, CConsultation& consultation, std::vector<CConsultationAnswer>& answers);
 bool TxToConsultationAnswer(std::string strDZeel, uint256 hash, const uint256& blockhash, CConsultationAnswer& answer);
 
 uint64_t GetConsensusParameter(Consensus::ConsensusParamsPos pos, const CStateViewCache& view);
@@ -674,6 +684,8 @@ uint64_t GetFundContributionPerBlock(const CStateViewCache& view);
 uint64_t GetStakingRewardPerBlock(const CStateViewCache& view);
 
 static void RelayDandelionTransaction(const CTransaction& tx, CNode* pfrom);
+static void RelayDandelionAggregationSession(const AggregationSession& tx, CNode* pfrom);
+static void RelayDandelionEncryptedCandidate(const EncryptedCandidateTransaction& ec, CNode* pfrom);
 static void CheckDandelionEmbargoes();
 
 std::vector<std::pair<uint256, int>>* GetProposalVotes(const uint256& hash);

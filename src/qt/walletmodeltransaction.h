@@ -12,6 +12,7 @@
 
 class SendCoinsRecipient;
 
+class CReserveBLSCTBlindingKey;
 class CReserveKey;
 class CWallet;
 class CWalletTx;
@@ -38,14 +39,18 @@ public:
     void newPossibleKeyChange(CWallet *wallet);
     CReserveKey *getPossibleKeyChange();
 
+    void newPossibleBLSCTBlindingKey(CWallet *wallet);
+    std::vector<shared_ptr<CReserveBLSCTBlindingKey>> *getPossibleBLSCTBlindingKey();
+
     void reassignAmounts(int nChangePosRet, CWalletTx* wTx, int index); // needed for the subtract-fee-from-amount feature
     QList<SendCoinsRecipient> recipients;
 
     bool fSpendsColdStaking;
 
 private:
-    CWalletTx *walletTransaction;
+    CWalletTx *walletTransaction = new CWalletTx();
     CReserveKey *keyChange;
+    std::vector<shared_ptr<CReserveBLSCTBlindingKey>> *blsctBlindingKey;
     CAmount fee;
 };
 

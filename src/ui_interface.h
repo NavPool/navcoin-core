@@ -76,7 +76,7 @@ public:
     };
 
     /** Update the balance in the wallet header. */
-    boost::signals2::signal<void (const CAmount &avail, const CAmount &pending, const CAmount &immat)> SetBalance;
+    boost::signals2::signal<void (const CAmount &avail, const CAmount &pending, const CAmount &immat, const CAmount &priv, const CAmount& privpending, const CAmount& privlocked)> SetBalance;
 
     /** Update the staked stats in the wallet header */
     boost::signals2::signal<void (const CAmount &all, const CAmount &today, const CAmount &week)> SetStaked;
@@ -86,6 +86,9 @@ public:
 
     /** If possible, ask the user a question. If not, falls back to ThreadSafeMessageBox(noninteractive_message, caption, style) and returns false. */
     boost::signals2::signal<bool (const std::string& message, const std::string& noninteractive_message, const std::string& caption, unsigned int style), boost::signals2::last_value<bool> > ThreadSafeQuestion;
+
+    /** As the user for a pin */
+    boost::signals2::signal<std::string (const std::string& message), boost::signals2::last_value<std::string>> AskForPin;
 
     /** Progress message during initialization. */
     boost::signals2::signal<void (const std::string &message)> InitMessage;
@@ -106,6 +109,9 @@ public:
 
     /** New block has been accepted */
     boost::signals2::signal<void (bool, const CBlockIndex *)> NotifyBlockTip;
+
+    /** New AggregationSession has been received */
+    boost::signals2::signal<void (std::string)> NewAggregationSession;
 
     /** Best header has changed */
     boost::signals2::signal<void (bool, const CBlockIndex *)> NotifyHeaderTip;

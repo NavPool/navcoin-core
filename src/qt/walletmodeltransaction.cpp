@@ -10,7 +10,6 @@
 
 WalletModelTransaction::WalletModelTransaction(const QList<SendCoinsRecipient> &recipients) :
     recipients(recipients),
-    walletTransaction(0),
     keyChange(0),
     fee(0),
     fSpendsColdStaking(false)
@@ -36,7 +35,7 @@ CWalletTx *WalletModelTransaction::getTransaction()
 
 unsigned int WalletModelTransaction::getTransactionSize()
 {
-    return (!walletTransaction ? 0 : ::GetVirtualTransactionSize(*walletTransaction));
+    return (!walletTransaction ? 0 : GetVirtualTransactionSize(*walletTransaction));
 }
 
 CAmount WalletModelTransaction::getTransactionFee()
@@ -58,22 +57,6 @@ void WalletModelTransaction::reassignAmounts(int nChangePosRet, CWalletTx* wTx, 
 
         if(j != index) continue;
 
-        if (rcp.paymentRequest.IsInitialized())
-        {
-            CAmount subtotal = 0;
-            const payments::PaymentDetails& details = rcp.paymentRequest.getDetails();
-            for (int j = 0; j < details.outputs_size(); j++)
-            {
-                const payments::Output& out = details.outputs(j);
-                if (out.amount() <= 0) continue;
-                if (i == nChangePosRet)
-                    i++;
-                subtotal += wTx->vout[i].nValue;
-                i++;
-            }
-            rcp.amount = subtotal;
-        }
-        else // normal recipient (no payment request)
         {
             if (i == nChangePosRet)
                 i++;
@@ -104,4 +87,20 @@ void WalletModelTransaction::newPossibleKeyChange(CWallet *wallet)
 CReserveKey *WalletModelTransaction::getPossibleKeyChange()
 {
     return keyChange;
+}
+
+void WalletModelTransaction::newPossibleBLSCTBlindingKey(CWallet *wallet)
+{
+    blsctBlindingKey = new std::vector<shared_ptr<CReserveBLSCTBlindingKey>>();
+
+    for (unsigned int i = 0; i < 3; i++)
+    {
+        shared_ptr<CReserveBLSCTBlindingKey> rk(new CReserveBLSCTBlindingKey(wallet));
+        blsctBlindingKey->insert(blsctBlindingKey->begin(), std::move(rk));
+    }
+}
+
+std::vector<shared_ptr<CReserveBLSCTBlindingKey>> *WalletModelTransaction::getPossibleBLSCTBlindingKey()
+{
+    return blsctBlindingKey;
 }

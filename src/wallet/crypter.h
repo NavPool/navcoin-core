@@ -18,13 +18,13 @@ const unsigned int WALLET_CRYPTO_IV_SIZE = 16;
 /**
  * Private key encryption is done based on a CMasterKey,
  * which holds a salt and random encryption key.
- * 
+ *
  * CMasterKeys are encrypted using AES-256-CBC using a key
  * derived using derivation method nDerivationMethod
  * (0 == EVP_sha512()) and derivation iterations nDeriveIterations.
  * vchOtherDerivationParameters is provided for alternative algorithms
  * which may require more parameters (such as scrypt).
- * 
+ *
  * Wallet Private Keys are then encrypted using AES-256-CBC
  * with the double-sha256 of the public key as the IV, and the
  * master key's key as the encryption key (see keystore.[ch]).
@@ -102,7 +102,7 @@ public:
 
         // Try to keep the key data out of swap (and be a bit over-careful to keep the IV that we don't even use out of swap)
         // Note that this does nothing about suspend-to-disk (which will put all our key data on disk)
-        // Note as well that at no point in this program is any attempt made to prevent stealing of keys by reading the memory of the running process.
+        // Note as well that at no bls::G1Element in this program is any attempt made to prevent stealing of keys by reading the memory of the running process.
         LockedPageManager::Instance().LockRange(&chKey[0], sizeof chKey);
         LockedPageManager::Instance().LockRange(&chIV[0], sizeof chIV);
     }
@@ -123,6 +123,7 @@ class CCryptoKeyStore : public CBasicKeyStore
 {
 private:
     CryptedKeyMap mapCryptedKeys;
+    std::vector<unsigned char> privateCryptedBlsKey;
 
     CKeyingMaterial vMasterKey;
 
@@ -138,6 +139,9 @@ protected:
 
     //! will encrypt previously unencrypted keys
     bool EncryptKeys(CKeyingMaterial& vMasterKeyIn);
+
+    //! will encrypt previously unencrypted blsct parameters
+    bool EncryptBLSCTParameters(CKeyingMaterial& vMasterKeyIn);
 
     bool Unlock(const CKeyingMaterial& vMasterKeyIn);
 
@@ -195,11 +199,23 @@ public:
         }
     }
 
+    bool GetBLSCTSubAddressSpendingKeyForOutput(const std::vector<uint8_t>& outputKey, const std::vector<uint8_t>& spendingKey, blsctKey& k) const;
+    bool GetBLSCTSubAddressSpendingKeyForOutput(const CKeyID &hashId, const std::vector<uint8_t>& outputKey, blsctKey& k) const;
+    bool GetBLSCTSubAddressSpendingKeyForOutput(const std::pair<uint64_t, uint64_t>& index, const std::vector<uint8_t>& outputKey, blsctKey& k) const;
+
+    bool GetBLSCTSpendKey(blsctKey& zk) const;
+    bool GetCryptedBLSCTSpendKey(std::vector<unsigned char>& k) const;
+    bool SetBLSCTSpendKey(const blsctKey& zk);
+    bool SetCryptedBLSCTSpendKey(const std::vector<unsigned char>& k);
+
     /**
      * Wallet status (encrypted, locked) changed.
      * Note: Called without locks held.
      */
     boost::signals2::signal<void (CCryptoKeyStore* wallet)> NotifyStatusChanged;
 };
+
+bool EncryptSecret(const CKeyingMaterial& vMasterKey, const CKeyingMaterial &vchPlaintext, const uint256& nIV, std::vector<unsigned char> &vchCiphertext);
+bool DecryptSecret(const CKeyingMaterial& vMasterKey, const std::vector<unsigned char>& vchCiphertext, const uint256& nIV, CKeyingMaterial& vchPlaintext);
 
 #endif // NAVCOIN_WALLET_CRYPTER_H

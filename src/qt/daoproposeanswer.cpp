@@ -1,4 +1,4 @@
-// Copyright (c) 2019 The NavCoin Core developers
+// Copyright (c) 2019-2020 The NavCoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -84,6 +84,9 @@ void DaoProposeAnswer::onPropose()
     UniValue strDZeel(UniValue::VOBJ);
     uint64_t nVersion = CConsultationAnswer::BASE_VERSION;
 
+    if (IsExcludeEnabled(chainActive.Tip(), Params().GetConsensus()))
+        nVersion |= CConsultationAnswer::EXCLUDE_VERSION;
+
     showWarning("");
 
     sAnswer = consultation.IsAboutConsensusParameter() ? RemoveFormatConsensusParameter((Consensus::ConsensusParamsPos)consultation.nMin, sAnswer) : sAnswer;
@@ -140,12 +143,14 @@ void DaoProposeAnswer::onPropose()
 
     bool created = true;
 
-    if (!pwalletMain->CreateTransaction(vecSend, wtx, reservekey, nFeeRequired, nChangePosRet, strError, NULL, true)) {
+    std::vector<shared_ptr<CReserveBLSCTBlindingKey>> reserveBLSCTKey;
+
+    if (!pwalletMain->CreateTransaction(vecSend, wtx, reservekey, reserveBLSCTKey, nFeeRequired, nChangePosRet, strError, false, NULL, true)) {
         if (!fSubtractFeeFromAmount && nValue + nFeeRequired > pwalletMain->GetBalance()) {
             created = false;
         }
     }
-    if (!pwalletMain->CommitTransaction(wtx, reservekey)) {
+    if (!pwalletMain->CommitTransaction(wtx, reservekey, reserveBLSCTKey)) {
         created = false;
     }
 

@@ -45,6 +45,10 @@
 #include <sys/resource.h>
 #include <sys/stat.h>
 
+// We need this for __getch function
+#include <termios.h>
+#include <unistd.h>
+
 #else
 
 #ifdef _MSC_VER
@@ -71,6 +75,10 @@
 
 #include <io.h> /* for _commit */
 #include <shlobj.h>
+
+// We need this for ReadConsoleA
+// and other windows cli functions
+#include <windows.h>
 #endif
 
 #ifdef HAVE_SYS_PRCTL_H
@@ -105,6 +113,7 @@ using namespace std;
 
 const char * const NAVCOIN_CONF_FILENAME = "navcoin.conf";
 const char * const NAVCOIN_PID_FILENAME = "navcoin.pid";
+const char * const DEFAULT_WALLET_DAT = "wallet.dat";
 
 std::vector<std::pair<std::string, bool>> vAddedProposalVotes;
 std::vector<std::pair<std::string, bool>> vAddedPaymentRequestVotes;
@@ -119,6 +128,7 @@ bool fPrintToConsole = false;
 bool fPrintToDebugLog = true;
 bool fDaemon = false;
 bool fServer = false;
+bool fTorServer = false;
 string strMiscWarning;
 bool fLogTimestamps = DEFAULT_LOGTIMESTAMPS;
 bool fLogTimeMicros = DEFAULT_LOGTIMEMICROS;
@@ -591,7 +601,7 @@ bool CheckIfWalletDatExists(bool fNetSpecific) {
 
     namespace fs = boost::filesystem;
 
-    boost::filesystem::path path("wallet.dat");
+    boost::filesystem::path path(GetArg("-wallet", DEFAULT_WALLET_DAT));
     if (!path.is_complete())
         path = GetDataDir(fNetSpecific) / path;
 
@@ -606,13 +616,21 @@ const boost::filesystem::path &GetDataDir(bool fNetSpecific)
 
     fs::path &path = fNetSpecific ? pathCachedNetSpecific : pathCached;
 
-    // This can be called during exceptions by LogPrintf(), so we cache the
-    // value so we don't have to do memory allocations after that.
-    if (!path.empty())
-        return path;
+    // Cache the path to avoid calling fs::create_directories on every call of
+    // this function
+    if (!path.empty()) return path;
 
-    if (mapArgs.count("-datadir")) {
-        path = fs::system_complete(mapArgs["-datadir"]);
+    std::string datadir = GetArg("-datadir", "");
+    if (!datadir.empty()) {
+        if (datadir[0] == '~') {
+            char const* home = getenv("HOME");
+            if (home or ((home = getenv("USERPROFILE")))) {
+                datadir.replace(0, 1, home);
+            }
+        }
+
+        path = fs::system_complete(datadir);
+
         if (!fs::is_directory(path)) {
             path = "";
             return path;
@@ -1315,4 +1333,108 @@ void SetThreadPriority(int nPriority)
     setpriority(PRIO_PROCESS, 0, nPriority);
 #endif
 #endif
+}
+
+bool BdbEncrypted(boost::filesystem::path wallet)
+{
+    // Open file
+    std::ifstream file(wallet.string());
+    char* buffer = new char [4];
+
+    // Get length of file
+    file.seekg(0, std::ios::end);
+    size_t length = file.tellg();
+
+    // Loop the file contents
+    for (int i = 0; i < length; i++) {
+        // Reset our cursor
+        file.seekg(i, file.beg);
+
+        // Read data from the file
+        file.read(buffer, 5);
+
+        // Check if we have it
+        if (string(buffer) == "main") {
+            // Close the file
+            file.close();
+
+            // It's not encrypted
+            return false;
+        }
+    }
+
+    // Close the file
+    file.close();
+
+    // It's encrypted
+    return true;
+}
+
+#ifndef WIN32
+int __getch() {
+    int ch;
+    struct termios t_old, t_new;
+
+    tcgetattr(STDIN_FILENO, &t_old);
+    t_new = t_old;
+    t_new.c_lflag &= ~(ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &t_new);
+
+    ch = getchar();
+
+    tcsetattr(STDIN_FILENO, TCSANOW, &t_old);
+
+    return ch;
+}
+#endif
+
+std::string __getpass(const std::string& prompt, bool show_asterisk)
+{
+    std::string password;
+    unsigned char ch = 0;
+
+    std::cout << prompt;
+
+#ifdef WIN32
+    const char BACKSPACE = 8;
+    const char RETURN = 13;
+
+    DWORD con_mode;
+    DWORD dwRead;
+
+    HANDLE hIn=GetStdHandle(STD_INPUT_HANDLE);
+
+    GetConsoleMode( hIn, &con_mode );
+    SetConsoleMode( hIn, con_mode & ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT) );
+#else
+    const char BACKSPACE = 127;
+    const char RETURN = 10;
+#endif
+
+#ifndef WIN32
+    while((ch = __getch()) != RETURN)
+#else
+    while(ReadConsoleA(hIn, &ch, 1, &dwRead, NULL) && ch != RETURN)
+#endif
+    {
+        if(ch == BACKSPACE)
+        {
+            if(password.length() != 0)
+            {
+                if(show_asterisk)
+                    std::cout << "\b \b";
+                password.resize(password.length()-1);
+            }
+        }
+        else
+        {
+            password+=ch;
+            if(show_asterisk)
+                std::cout << '*';
+        }
+    }
+
+    std::cout << std::endl;
+
+    return password;
 }

@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2015 The Bitcoin Core developers
-// Copyright (c) 2017-2018 The NavCoin Core developers
+// Copyright (c) 2017-2021 The NavCoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -110,7 +110,7 @@ CTxMemPool stempool(::minRelayTxFee);
 struct IteratorComparator
 {
     template<typename I>
-    bool operator()(const I& a, const I& b)
+    bool operator()(const I& a, const I& b) const
     {
         return &(*a) < &(*b);
     }
@@ -893,6 +893,8 @@ bool IsFinalTx(const CTransaction &tx, int nBlockHeight, int64_t nBlockTime)
         return true;
     if ((int64_t)tx.nLockTime < ((int64_t)tx.nLockTime < LOCKTIME_THRESHOLD ? (int64_t)nBlockHeight : nBlockTime))
         return true;
+    if (tx.IsBLSCT())
+        return true;
     for(const CTxIn& txin: tx.vin) {
         if (!(txin.nSequence == CTxIn::SEQUENCE_FINAL))
             return false;
@@ -1036,7 +1038,7 @@ bool TestLockPointValidity(const LockPoints* lp)
 bool CheckSequenceLocks(const CTransaction &tx, int flags, LockPoints* lp, bool useExistingLockPoints)
 {
     AssertLockHeld(cs_main);
-    LOCK(mempool.cs);
+    LOCK2(mempool.cs, stempool.cs);
 
     CBlockIndex* tip = chainActive.Tip();
     CBlockIndex index;
@@ -1064,9 +1066,9 @@ bool CheckSequenceLocks(const CTransaction &tx, int flags, LockPoints* lp, bool 
         for (size_t txinIndex = 0; txinIndex < tx.vin.size(); txinIndex++) {
             const CTxIn& txin = tx.vin[txinIndex];
             CCoins coins;
-            if (!viewMemPool.GetCoins(txin.prevout.hash, coins))
+            if (!viewMemPool.GetCoins(txin.prevout.hash, coins, &mempool.cs, &stempool.cs))
             {
-                if (!viewStemPool.GetCoins(txin.prevout.hash, coins)) {
+                if (!viewStemPool.GetCoins(txin.prevout.hash, coins, &mempool.cs, &stempool.cs)) {
                     return error("%s: Missing input", __func__);
                 }
             }
@@ -1168,6 +1170,15 @@ bool CheckTransaction(const CTransaction& tx, CValidationState &state)
     if (::GetSerializeSize(tx, SER_NETWORK, PROTOCOL_VERSION | SERIALIZE_TRANSACTION_NO_WITNESS) > MAX_BLOCK_BASE_SIZE)
         return state.DoS(100, false, REJECT_INVALID, "bad-txns-oversize");
 
+    if ((tx.IsCTOutput() && (tx.vchBalanceSig.size() == 0)) || (!tx.IsCTOutput() && (tx.HasCTOutput() || tx.vchBalanceSig.size() > 0)))
+        return state.DoS(100, false, REJECT_INVALID, "bad-ctout-version-flag");
+
+    if ((tx.IsBLSInput() && (tx.vchBalanceSig.size() == 0 || tx.vchTxSig.size() == 0)) || (!tx.IsBLSInput() && (tx.vchTxSig.size() > 0)))
+        return state.DoS(100, false, REJECT_INVALID, "bad-blsinput-version-flag");
+
+    if (tx.IsCoinBase() && (tx.IsBLSInput() || tx.IsCTOutput()))
+        return state.DoS(100, false, REJECT_INVALID, "bad-blsct-coinbase");
+
     // Check for negative or overflow output values
     CAmount nValueOut = 0;
     for(const CTxOut& txout: tx.vout)
@@ -1192,6 +1203,17 @@ bool CheckTransaction(const CTransaction& tx, CValidationState &state)
         vInOutPoints.insert(txin.prevout);
     }
 
+    // Check for duplicate bls outputs
+    set<CTxOut> vBlsOut;
+    for(const CTxOut& txout: tx.vout)
+    {
+        if (!txout.IsBLSCT()) continue;
+        if (vBlsOut.count(txout))
+            return state.DoS(100, false, REJECT_INVALID, "bad-txns-ctout-duplicate");
+        vBlsOut.insert(txout);
+    }
+
+
     if (tx.IsCoinBase())
     {
         if (tx.vin[0].scriptSig.size() < 2 || tx.vin[0].scriptSig.size() > 100)
@@ -1207,13 +1229,13 @@ bool CheckTransaction(const CTransaction& tx, CValidationState &state)
     return true;
 }
 
-void LimitMempoolSize(CTxMemPool& pool, size_t limit, unsigned long age) {
-    int expired = pool.Expire(GetTime() - age);
+void LimitMempoolSize(CTxMemPool& pool, size_t limit, unsigned long age, CCriticalSection* mpcs, CCriticalSection* spcs) {
+    int expired = pool.Expire(GetTime() - age, mpcs, spcs);
     if (expired != 0)
         LogPrint("mempool", "Expired %i transactions from the memory pool\n", expired);
 
     std::vector<uint256> vNoSpendsRemaining;
-    pool.TrimToSize(limit, &vNoSpendsRemaining);
+    pool.TrimToSize(limit, mpcs, spcs, &vNoSpendsRemaining);
     for(const uint256& removed: vNoSpendsRemaining)
         pcoinsTip->Uncache(removed);
 }
@@ -1227,7 +1249,31 @@ std::string FormatStateMessage(const CValidationState &state)
         state.GetRejectCode());
 }
 
-bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState& state, const CTransaction& tx, bool fLimitFree,
+bool RemoveBLSCTConflicting(CTxMemPool& pool, const CTxIn& txin, CCriticalSection* mpcs, CCriticalSection* spcs)
+{
+    LOCK2(mpcs, spcs);
+
+    CTxMemPool::setEntries allConflicting;
+    auto itConflicting = pool.mapNextTx.find(txin.prevout);
+
+    if (itConflicting != pool.mapNextTx.end())
+    {
+        const CTransaction *ptxConflicting = itConflicting->second;
+        uint256 hashConflicting = ptxConflicting->GetHash();
+        CTxMemPool::txiter mi = pool.mapTx.find(hashConflicting);
+        if (mi == pool.mapTx.end())
+            return true;
+
+        LogPrintf("%s: Removing BLSCT conflict %s from the mempool\n", __func__, hashConflicting.ToString());
+
+        pool.CalculateDescendants(mi, allConflicting);
+        pool.RemoveStaged(allConflicting, false, mpcs, spcs);
+    }
+
+    return true;
+}
+
+bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CCriticalSection *mpcs, CCriticalSection *spcs, CValidationState& state, const CTransaction& tx, bool fLimitFree,
                               bool* pfMissingInputs, bool fOverrideMempoolLimit, const CAmount& nAbsurdFee,
                               std::vector<uint256>& vHashTxnToUncache)
 {
@@ -1241,13 +1287,13 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState& state, const C
     if (IsCommunityFundEnabled(chainActive.Tip(), Params().GetConsensus()) && tx.nVersion < CTransaction::TXDZEEL_VERSION_V2)
       return state.DoS(100, false, REJECT_INVALID, "old-version");
 
-    if (!IsCommunityFundEnabled(chainActive.Tip(), Params().GetConsensus()) && (tx.nVersion == CTransaction::PROPOSAL_VERSION || tx.nVersion == CTransaction::PAYMENT_REQUEST_VERSION))
+    if (!IsCommunityFundEnabled(chainActive.Tip(), Params().GetConsensus()) && ((tx.nVersion&0xF) == CTransaction::PROPOSAL_VERSION || (tx.nVersion&0xF) == CTransaction::PAYMENT_REQUEST_VERSION))
         return state.DoS(100, false, REJECT_INVALID, "too-early-cfund");
 
-    if (!IsDAOEnabled(chainActive.Tip(), Params().GetConsensus()) && (tx.nVersion == CTransaction::CONSULTATION_VERSION || tx.nVersion == CTransaction::ANSWER_VERSION))
+    if (!IsDAOEnabled(chainActive.Tip(), Params().GetConsensus()) && ((tx.nVersion&0xF) == CTransaction::CONSULTATION_VERSION || (tx.nVersion&0xF) == CTransaction::ANSWER_VERSION))
         return state.DoS(100, false, REJECT_INVALID, "too-early-consultation");
 
-    if (!IsColdStakingv2Enabled(chainActive.Tip(), Params().GetConsensus()) && tx.nVersion == CTransaction::VOTE_VERSION)
+    if (!IsColdStakingv2Enabled(chainActive.Tip(), Params().GetConsensus()) && (tx.nVersion&0xF) == CTransaction::VOTE_VERSION)
         return state.DoS(100, false, REJECT_INVALID, "too-early-dao-vote-tx");
 
     // Coinbase is only valid in a block, not as a loose transaction
@@ -1263,6 +1309,11 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState& state, const C
     if (!GetBoolArg("-prematurewitness",false) && !tx.wit.IsNull() && !witnessEnabled) {
         return state.DoS(0, false, REJECT_NONSTANDARD, "no-witness-yet", true);
     }
+
+    bool fBls = IsBLSCTEnabled(chainActive.Tip(), Params().GetConsensus());
+    if (!fBls && (tx.IsBLSInput() || tx.IsCTOutput())) {
+        return state.DoS(0, false, REJECT_NONSTANDARD, "no-blsct-yet", true);
+     }
 
     // Rather not work on nonstandard transactions (unless -testnet/-regtest)
     string reason;
@@ -1282,9 +1333,14 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState& state, const C
     // Check for conflicts with in-memory transactions
     set<uint256> setConflicts;
     {
-    LOCK(pool.cs); // protect pool.mapNextTx
+    LOCK2(mpcs, spcs); // protect pool.mapNextTx
     for(const CTxIn &txin: tx.vin)
     {
+        if (tx.IsBLSInput())
+        {
+            if (pool.exists(txin.prevout.hash))
+                return state.Invalid(false, REJECT_CONFLICT, "blsct-cant-spend-unconfirmed");
+        }
         auto itConflicting = pool.mapNextTx.find(txin.prevout);
         if (itConflicting != pool.mapNextTx.end())
         {
@@ -1304,7 +1360,7 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState& state, const C
                 // unconfirmed ancestors anyway; doing otherwise is hopelessly
                 // insecure.
                 bool fReplacementOptOut = true;
-                if (fEnableReplacement)
+                if (fEnableReplacement && !tx.IsBLSInput())
                 {
                     for(const CTxIn &txin: ptxConflicting->vin)
                     {
@@ -1315,7 +1371,7 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState& state, const C
                         }
                     }
                 }
-                if (fReplacementOptOut)
+                if (fReplacementOptOut && tx.IsBLSInput())
                     return state.Invalid(false, REJECT_CONFLICT, "txn-mempool-conflict");
 
                 setConflicts.insert(ptxConflicting->GetHash());
@@ -1324,6 +1380,7 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState& state, const C
     }
     }
 
+    std::vector<RangeproofEncodedData> blsctData;
     bool fCFund = IsCommunityFundEnabled(chainActive.Tip(), Params().GetConsensus());
     bool fDAOConsultations = IsDAOEnabled(chainActive.Tip(), Params().GetConsensus());
 
@@ -1334,7 +1391,7 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState& state, const C
         CAmount nValueIn = 0;
         LockPoints lp;
         {
-        LOCK(pool.cs);
+        LOCK2(mpcs, spcs);
         CStateViewMemPool viewMemPool(pcoinsTip, pool);
         view.SetBackend(viewMemPool);
 
@@ -1347,19 +1404,19 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState& state, const C
 
             GetVersionMask(nVersionMaskProposal, nVersionMaskPaymentRequest, nVersionMaskConsultation, nVersionMaskConsultationAnswer, chainActive.Tip());
 
-            if(fCFund && tx.nVersion == CTransaction::PROPOSAL_VERSION)
+            if((tx.nVersion&0xF) == CTransaction::PROPOSAL_VERSION) // Community Fund Proposal
                 if(!IsValidProposal(tx, view, nVersionMaskProposal))
                     return state.DoS(10, false, REJECT_INVALID, "bad-cfund-proposal");
 
-            if(fCFund && tx.nVersion == CTransaction::PAYMENT_REQUEST_VERSION)
+            if((tx.nVersion&0xF) == CTransaction::PAYMENT_REQUEST_VERSION) // Community Fund Payment Request
                 if(!IsValidPaymentRequest(tx, view, nVersionMaskPaymentRequest))
                     return state.DoS(10, false, REJECT_INVALID, "bad-cfund-payment-request");
 
-            if(fDAOConsultations && tx.nVersion == CTransaction::CONSULTATION_VERSION)
+            if(fDAOConsultations && (tx.nVersion&0xF) == CTransaction::CONSULTATION_VERSION)
                 if(!IsValidConsultation(tx, view, nVersionMaskConsultation, chainActive.Tip()))
                     return state.DoS(10, false, REJECT_INVALID, "bad-dao-consultation");
 
-            if(fDAOConsultations && tx.nVersion == CTransaction::ANSWER_VERSION)
+            if(fDAOConsultations && (tx.nVersion&0xF) == CTransaction::ANSWER_VERSION)
                 if(!IsValidConsultationAnswer(tx, view, nVersionMaskConsultationAnswer, chainActive.Tip()))
                     return state.DoS(10, false, REJECT_INVALID, "bad-dao-consultation-answer");
         }
@@ -1368,7 +1425,7 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState& state, const C
 
         if (fColdStakingv2)
         {
-            if (tx.nVersion == CTransaction::VOTE_VERSION)
+            if ((tx.nVersion&0xF) == CTransaction::VOTE_VERSION)
             {
                 if (!IsValidDaoTxVote(tx, view))
                 {
@@ -1444,7 +1501,7 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState& state, const C
 
             GetVersionMask(nVersionMaskProposal, nVersionMaskPaymentRequest, nVersionMaskConsultation, nVersionMaskConsultationAnswer, chainActive.Tip());
 
-            if(fCFund && tx.nVersion == CTransaction::PROPOSAL_VERSION && IsValidProposal(tx, view, nVersionMaskProposal)){
+            if(nProposalFee > 0 && (tx.nVersion&0xF) == CTransaction::PROPOSAL_VERSION && IsValidProposal(tx, view, nVersionMaskProposal)){
                 CProposal proposal;
                 if (TxToProposal(tx.strDZeel, tx.GetHash(), uint256(), nProposalFee, proposal))
                 {
@@ -1456,7 +1513,8 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState& state, const C
                     return state.DoS(0, false, REJECT_NONSTANDARD, "invalid proposal");
                 }
             }
-            else if(fCFund && tx.nVersion == CTransaction::PAYMENT_REQUEST_VERSION && IsValidPaymentRequest(tx, view, nVersionMaskPaymentRequest)){
+
+            if((tx.nVersion&0xF) == CTransaction::PAYMENT_REQUEST_VERSION && IsValidPaymentRequest(tx, view, nVersionMaskPaymentRequest)){
                 CPaymentRequest prequest;
                 if (TxToPaymentRequest(tx.strDZeel, tx.GetHash(), uint256(), prequest))
                 {
@@ -1476,11 +1534,11 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState& state, const C
                     return state.DoS(0, false, REJECT_NONSTANDARD, "invalid payment request");
                 }
             }
-            else if(fDAOConsultations && tx.nVersion == CTransaction::CONSULTATION_VERSION && IsValidConsultation(tx, view, nVersionMaskConsultation, chainActive.Tip()))
+            else if(fDAOConsultations && (tx.nVersion&0xF) == CTransaction::CONSULTATION_VERSION && IsValidConsultation(tx, view, nVersionMaskConsultation, chainActive.Tip()))
             {
                 CConsultation consultation;
                 std::vector<CConsultationAnswer> vAnswers;
-                if (TxToConsultation(tx.strDZeel, tx.GetHash(), uint256(), consultation, vAnswers))
+                if (TxToConsultation(tx.strDZeel, tx.GetHash(), uint256(), chainActive.Tip(), consultation, vAnswers))
                 {
                     if (viewMemPool.AddConsultation(consultation))
                     {
@@ -1501,7 +1559,7 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState& state, const C
                     return state.DoS(0, false, REJECT_NONSTANDARD, "invalid dao consultation");
                 }
             }
-            else if(fDAOConsultations && tx.nVersion == CTransaction::ANSWER_VERSION && IsValidConsultationAnswer(tx, view, nVersionMaskConsultationAnswer, chainActive.Tip()))
+            else if(fDAOConsultations && (tx.nVersion&0xF) == CTransaction::ANSWER_VERSION && IsValidConsultationAnswer(tx, view, nVersionMaskConsultationAnswer, chainActive.Tip()))
             {
                 CConsultationAnswer answer;
                 if (TxToConsultationAnswer(tx.strDZeel, tx.GetHash(), uint256(), answer))
@@ -1540,10 +1598,13 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState& state, const C
 
         CAmount nValueOut = tx.GetValueOut();
         CAmount nFees = (!tx.IsCoinStake())?nValueIn-nValueOut:0;
+        if (tx.IsBLSInput() || tx.IsCTOutput())
+            nFees = tx.GetFee();
+
         // nModifiedFees includes any fee deltas from PrioritiseTransaction
         CAmount nModifiedFees = nFees;
         double nPriorityDummy = 0;
-        pool.ApplyDeltas(hash, nPriorityDummy, nModifiedFees);
+        pool.ApplyDeltas(hash, nPriorityDummy, nModifiedFees, mpcs, spcs);
 
         CAmount inChainInputValue;
         double dPriority = view.GetPriority(tx, chainActive.Height(), inChainInputValue);
@@ -1571,7 +1632,7 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState& state, const C
             return state.DoS(0, false, REJECT_NONSTANDARD, "bad-txns-too-many-sigops", false,
                 strprintf("%d", nSigOpsCost));
 
-        CAmount mempoolRejectFee = pool.GetMinFee(GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000).GetFee(nSize);
+        CAmount mempoolRejectFee = pool.GetMinFee(GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000, mpcs, spcs).GetFee(nSize);
         if (mempoolRejectFee > 0 && nModifiedFees < mempoolRejectFee) {
             return state.DoS(0, false, REJECT_INSUFFICIENTFEE, "mempool min fee not met", false, strprintf("%d < %d", nFees, mempoolRejectFee));
         } else if (GetBoolArg("-relaypriority", DEFAULT_RELAYPRIORITY) && nModifiedFees < ::minRelayTxFee.GetFee(nSize) && !AllowFree(entry.GetPriority(chainActive.Height() + 1))) {
@@ -1645,7 +1706,7 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState& state, const C
         // If we don't hold the lock allConflicting might be incomplete; the
         // subsequent RemoveStaged() and addUnchecked() calls don't guarantee
         // mempool consistency for us.
-        LOCK(pool.cs);
+        LOCK2(mpcs, spcs);
         if (setConflicts.size())
         {
             CFeeRate newFeeRate(nModifiedFees, nSize);
@@ -1769,12 +1830,12 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState& state, const C
         // Check against previous transactions
         // This is done last to help prevent CPU exhaustion denial-of-service attacks.
         PrecomputedTransactionData txdata(tx);
-        if (!CheckInputs(tx, state, view, true, scriptVerifyFlags, true, txdata)) {
+        if (!CheckInputs(tx, state, view, true, scriptVerifyFlags, true, blsctData, txdata)) {
             // SCRIPT_VERIFY_CLEANSTACK requires SCRIPT_VERIFY_WITNESS, so we
             // need to turn both off, and compare against just turning off CLEANSTACK
             // to see if the failure is specifically due to witness validation.
-            if (CheckInputs(tx, state, view, true, scriptVerifyFlags & ~(SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_CLEANSTACK), true, txdata) &&
-                !CheckInputs(tx, state, view, true, scriptVerifyFlags & ~SCRIPT_VERIFY_CLEANSTACK, true, txdata)) {
+            if (CheckInputs(tx, state, view, true, scriptVerifyFlags & ~(SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_CLEANSTACK), true, blsctData, txdata) &&
+                !CheckInputs(tx, state, view, true, scriptVerifyFlags & ~SCRIPT_VERIFY_CLEANSTACK, true, blsctData, txdata)) {
                 // Only the witness is wrong, so the transaction itself may be fine.
                 state.SetCorruptionPossible();
             }
@@ -1790,7 +1851,7 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState& state, const C
         // There is a similar check in CreateNewBlock() to prevent creating
         // invalid blocks, however allowing such transactions into the mempool
         // can be exploited as a DoS attack.
-        if (!CheckInputs(tx, state, view, true, MANDATORY_SCRIPT_VERIFY_FLAGS, true, txdata))
+        if (!CheckInputs(tx, state, view, true, MANDATORY_SCRIPT_VERIFY_FLAGS, true, blsctData, txdata))
         {
             return error("%s: BUG! PLEASE REPORT THIS! ConnectInputs failed against MANDATORY but not STANDARD flags %s, %s",
                 __func__, hash.ToString(), FormatStateMessage(state));
@@ -1805,39 +1866,39 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState& state, const C
                     FormatMoney(nModifiedFees - nConflictingFees),
                     (int)nSize - (int)nConflictingSize);
         }
-        pool.RemoveStaged(allConflicting, false);
+        pool.RemoveStaged(allConflicting, false, mpcs, spcs);
 
         // Store transaction in memory
-        pool.addUnchecked(hash, entry, setAncestors, !IsInitialBlockDownload());
+        pool.addUnchecked(hash, entry, setAncestors, mpcs, spcs, !IsInitialBlockDownload());
 
         // Add memory address index
         if (fAddressIndex) {
-            pool.addAddressIndex(entry, view);
+            pool.addAddressIndex(entry, view, mpcs, spcs);
         }
 
         // Add memory spent index
         if (fSpentIndex) {
-            pool.addSpentIndex(entry, view);
+            pool.addSpentIndex(entry, view, mpcs, spcs);
         }
 
         // trim mempool and check if tx was trimmed
         if (!fOverrideMempoolLimit) {
-            LimitMempoolSize(pool, GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000, GetArg("-mempoolexpiry", DEFAULT_MEMPOOL_EXPIRY) * 60 * 60);
+            LimitMempoolSize(pool, GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000, GetArg("-mempoolexpiry", DEFAULT_MEMPOOL_EXPIRY) * 60 * 60, mpcs, spcs);
             if (!pool.exists(hash))
                 return state.DoS(0, false, REJECT_INSUFFICIENTFEE, "mempool full");
         }
     }
 
-    SyncWithWallets(tx, nullptr, nullptr);
+    SyncWithWallets(tx, nullptr, nullptr, true, &blsctData);
 
     return true;
 }
 
-bool AcceptToMemoryPool(CTxMemPool& pool, CValidationState &state, const CTransaction &tx, bool fLimitFree,
+bool AcceptToMemoryPool(CTxMemPool& pool, CCriticalSection *mpcs, CCriticalSection *spcs, CValidationState &state, const CTransaction &tx, bool fLimitFree,
                         bool* pfMissingInputs, bool fOverrideMempoolLimit, const CAmount nAbsurdFee)
 {
     std::vector<uint256> vHashTxToUncache;
-    bool res = AcceptToMemoryPoolWorker(pool, state, tx, fLimitFree, pfMissingInputs, fOverrideMempoolLimit, nAbsurdFee, vHashTxToUncache);
+    bool res = AcceptToMemoryPoolWorker(pool, mpcs, spcs, state, tx, fLimitFree, pfMissingInputs, fOverrideMempoolLimit, nAbsurdFee, vHashTxToUncache);
     if (res)
         LogPrintf("%s: Successfully added txn %s to %s.\n", __func__, tx.ToString(), (&pool == &mempool) ? "mempool" : "stempool");
     else
@@ -1865,7 +1926,7 @@ bool GetSpentIndex(CSpentIndexKey &key, CSpentIndexValue &value)
     if (!fSpentIndex)
         return false;
 
-    if (mempool.getSpentIndex(key, value))
+    if (mempool.getSpentIndex(key, value, &mempool.cs, &stempool.cs))
         return true;
 
     if (!pblocktree->ReadSpentIndex(key, value))
@@ -1881,6 +1942,19 @@ bool HashOnchainActive(const uint256 &hash)
     if (!chainActive.Contains(pblockindex)) {
         return false;
     }
+
+    return true;
+}
+
+bool GetAddressHistory(uint160 addressHash, uint160 addressHash2,
+                     std::vector<std::pair<CAddressHistoryKey, CAddressHistoryValue> > &addressHistory,
+                     AddressHistoryFilter filter, int start, int end)
+{
+    if (!fAddressIndex)
+        return error("address index not enabled");
+
+    if (!pblocktree->ReadAddressHistory(addressHash, addressHash2, addressHistory, filter, start, end))
+        return error("unable to get history for address");
 
     return true;
 }
@@ -1917,7 +1991,7 @@ bool GetTransaction(const uint256 &hash, CTransaction &txOut, const Consensus::P
 
     LOCK(cs_main);
 
-    std::shared_ptr<const CTransaction> ptx = mempool.get(hash);
+    std::shared_ptr<const CTransaction> ptx = mempool.get(hash, &mempool.cs, &stempool.cs);
     if (ptx)
     {
         txOut = *ptx;
@@ -2263,59 +2337,101 @@ int GetSpendHeight(const CStateViewCache& inputs)
 }
 
 namespace Consensus {
-bool CheckTxInputs(const CTransaction& tx, CValidationState& state, const CStateViewCache& inputs, int nSpendHeight)
+bool CheckTxInputs(const CTransaction& tx, CValidationState& state, const CStateViewCache& inputs, int nSpendHeight, std::vector<RangeproofEncodedData>& blsctData, CAmount allowedInPrivate = 0)
 {
-        // This doesn't trigger the DoS code on purpose; if it did, it would make it easier
-        // for an attacker to attempt to split the network.
-        if (!inputs.HaveInputs(tx))
-            return state.Invalid(false, 0, "", "Inputs unavailable");
-        CAmount nValueIn = 0;
-        CAmount nFees = 0;
-        for (unsigned int i = 0; i < tx.vin.size(); i++)
+    // This doesn't trigger the DoS code on purpose; if it did, it would make it easier
+    // for an attacker to attempt to split the network.
+    if (!inputs.HaveInputs(tx))
+        return state.Invalid(false, 0, "", "Inputs unavailable");
+    CAmount nValueIn = 0;
+    CAmount nFees = 0;
+    bool fHasBLSInput = false;
+    for (unsigned int i = 0; i < tx.vin.size(); i++)
+    {
+        const COutPoint &prevout = tx.vin[i].prevout;
+        const CCoins *coins = inputs.AccessCoins(prevout.hash);
+        assert(coins);
+
+        if (coins->vout[prevout.n].IsBLSCT())
         {
-            const COutPoint &prevout = tx.vin[i].prevout;
-            const CCoins *coins = inputs.AccessCoins(prevout.hash);
-            assert(coins);
-
-            // If prev is coinbase, check that it's matured
-            if ((coins->IsCoinBase() || coins->IsCoinStake()) && !GetBoolArg("-testnet",false)) {
-                if (nSpendHeight - coins->nHeight < ::Params().GetConsensus().nCoinbaseMaturity && nSpendHeight - coins->nHeight > 0)
-                    return state.Invalid(false,
-                        REJECT_INVALID, "bad-txns-premature-spend-of-coinbase",
-                        strprintf("tried to spend %s at depth %d", coins->IsCoinBase() ?"coinbase":"coinstake",nSpendHeight - coins->nHeight));
-            }
-
-            // Check for negative or overflow input values
-            nValueIn += coins->vout[prevout.n].nValue;
-            if (!MoneyRange(coins->vout[prevout.n].nValue) || !MoneyRange(nValueIn))
-                return state.DoS(100, false, REJECT_INVALID, "bad-txns-inputvalues-outofrange");
-
+            if (!fHasBLSInput && i > 0)
+                return state.Invalid(false,
+                                     REJECT_INVALID, "bad-mix-bls-inputs",
+                                     "transaction mixes bls and legacy inputs");
+            fHasBLSInput = true;
         }
 
+        if (fHasBLSInput && !coins->vout[prevout.n].IsBLSCT())
+            return state.Invalid(false,
+                                 REJECT_INVALID, "bad-mix-bls-inputs",
+                                 "transaction mixes bls and legacy inputs");
+
+#if CLIENT_BUILD_IS_TEST_RELEASE
+        bool fTestNet = GetBoolArg("-testnet", true);
+#else
+        bool fTestNet = GetBoolArg("-testnet", false);
+#endif
+
+        // If prev is coinbase, check that it's matured
+        if ((coins->IsCoinBase() || coins->IsCoinStake()) && !fTestNet) {
+            if (nSpendHeight - coins->nHeight < ::Params().GetConsensus().nCoinbaseMaturity && nSpendHeight - coins->nHeight > 0)
+                return state.Invalid(false,
+                                     REJECT_INVALID, "bad-txns-premature-spend-of-coinbase",
+                                     strprintf("tried to spend %s at depth %d", coins->IsCoinBase() ?"coinbase":"coinstake",nSpendHeight - coins->nHeight));
+        }
+
+        // Check for negative or overflow input values
+        nValueIn += coins->vout[prevout.n].nValue;
+        if (!MoneyRange(coins->vout[prevout.n].nValue) || !MoneyRange(nValueIn))
+            return state.DoS(100, false, REJECT_INVALID, "bad-txns-inputvalues-outofrange");
+
+    }
+
+    if (!tx.IsBLSCT())
+    {
         if(!tx.IsCoinBase() && !tx.IsCoinStake()){
-          if (nValueIn < tx.GetValueOut())
-              return state.DoS(100, false, REJECT_INVALID, "bad-txns-in-belowout", false,
-                  strprintf("value in (%s) < value out (%s)", FormatMoney(nValueIn), FormatMoney(tx.GetValueOut())));
+            if (nValueIn < tx.GetValueOut())
+                return state.DoS(100, false, REJECT_INVALID, "bad-txns-in-belowout", false,
+                                 strprintf("value in (%s) < value out (%s)", FormatMoney(nValueIn), FormatMoney(tx.GetValueOut())));
 
-          // Tally transaction fees
-          CAmount nTxFee = nValueIn - tx.GetValueOut();
-          if (nTxFee < 0)
-              return state.DoS(100, false, REJECT_INVALID, "bad-txns-fee-negative");
-          nFees += nTxFee;
-          if (!MoneyRange(nFees))
-              return state.DoS(100, false, REJECT_INVALID, "bad-txns-fee-outofrange");
+            // Tally transaction fees
+            CAmount nTxFee = nValueIn - tx.GetValueOut();
+            if (nTxFee < 0)
+                return state.DoS(100, false, REJECT_INVALID, "bad-txns-fee-negative");
+            nFees += nTxFee;
+            if (!MoneyRange(nFees))
+                return state.DoS(100, false, REJECT_INVALID, "bad-txns-fee-outofrange");
+        }
+    }
+    else
+    {
+        try
+        {
+            blsctKey v;
+
+            if (!(pwalletMain && pwalletMain->GetBLSCTViewKey(v)))
+                v = blsctKey(bls::PrivateKey::FromBN(Scalar::Rand().bn));
+
+            if (!tx.IsCoinStake() && !VerifyBLSCT(tx, v.GetKey(), blsctData, inputs, state, false, allowedInPrivate))
+                return false;
+        }
+        catch(...)
+        {
+            return false;
         }
 
+        nFees += tx.GetFee();
+    }
 
     return true;
 }
 }// namespace Consensus
 
-bool CheckInputs(const CTransaction& tx, CValidationState &state, const CStateViewCache &inputs, bool fScriptChecks, unsigned int flags, bool cacheStore, PrecomputedTransactionData& txdata, std::vector<CScriptCheck> *pvChecks)
+bool CheckInputs(const CTransaction& tx, CValidationState &state, const CStateViewCache &inputs, bool fScriptChecks, unsigned int flags, bool cacheStore, std::vector<RangeproofEncodedData>& blsctData, PrecomputedTransactionData& txdata, std::vector<CScriptCheck> *pvChecks, CAmount allowedInPrivate)
 {
     if (!tx.IsCoinBase())
     {
-        if (!Consensus::CheckTxInputs(tx, state, inputs, GetSpendHeight(inputs)))
+        if (!Consensus::CheckTxInputs(tx, state, inputs, GetSpendHeight(inputs), blsctData, allowedInPrivate))
             return false;
 
         if (pvChecks)
@@ -2337,22 +2453,25 @@ bool CheckInputs(const CTransaction& tx, CValidationState &state, const CStateVi
                 const CCoins* coins = inputs.AccessCoins(prevout.hash);
                 assert(coins);
 
-                CTransaction txPrev;
-                uint256 hashBlock = uint256();
-                int valid = 1;
+                if (coins->nHeight > 1294597 && coins->nHeight < 2741760)
+                {
+                    CTransaction txPrev;
+                    uint256 hashBlock = uint256();
+                    int valid = 1;
 
-                if (!GetTransaction(prevout.hash, txPrev, Params().GetConsensus(), hashBlock, inputs, true))
-                   valid = 0;
+                    if (!GetTransaction(prevout.hash, txPrev, Params().GetConsensus(), hashBlock, inputs, true))
+                        valid = 0;
 
-                if (mapBlockIndex.count(hashBlock) == 0)
-                   valid = 0;
+                    if (mapBlockIndex.count(hashBlock) == 0)
+                        valid = 0;
 
-                if(valid){ // prev out is already checked in CheckTxInputs
-                    CBlockIndex* pblockindex = mapBlockIndex[hashBlock];
+                    if(valid){ // prev out is already checked in CheckTxInputs
+                        CBlockIndex* pblockindex = mapBlockIndex[hashBlock];
 
-                    // ppcoin: check transaction timestamp
-                    if (txPrev.nTime > tx.nTime && pblockindex->nHeight > 1294597)
-                        return state.DoS(100, false, REJECT_INVALID, "tx-timestamp-earlier-as-output");
+                        // ppcoin: check transaction timestamp
+                        if (txPrev.nTime > tx.nTime)
+                            return state.DoS(100, false, REJECT_INVALID, "tx-timestamp-earlier-as-output");
+                    }
                 }
 
                 // Verify signature
@@ -2518,6 +2637,8 @@ bool DisconnectBlock(const CBlock& block, CValidationState& state, const CBlockI
         return error("DisconnectBlock(): block and undo data inconsistent");
 
     std::vector<std::pair<CAddressIndexKey, CAmount> > addressIndex;
+    std::vector<std::pair<CAddressHistoryKey, CAddressHistoryValue> > addressHistory;
+    std::map<CAddressHistoryKey, CAddressHistoryValue> addressHistoryMap;
     std::vector<std::pair<CAddressUnspentKey, CAddressUnspentValue> > addressUnspentIndex;
     std::vector<std::pair<CSpentIndexKey, CSpentIndexValue> > spentIndex;
 
@@ -2536,22 +2657,21 @@ bool DisconnectBlock(const CBlock& block, CValidationState& state, const CBlockI
             uint64_t nVersionMaskConsultation;
             uint64_t nVersionMaskConsultationAnswer;
 
-            if(fCFund && tx.nVersion == CTransaction::PROPOSAL_VERSION)
-            {
+            if((tx.nVersion&0xF) == CTransaction::PROPOSAL_VERSION) {
                 view.RemoveProposal(hash);
                 LogPrintf("%s: Removed proposal %s\n", __func__, hash.ToString());
             }
-            else if(fCFund && tx.nVersion == CTransaction::PAYMENT_REQUEST_VERSION)
-            {
+
+            if((tx.nVersion&0xF) == CTransaction::PAYMENT_REQUEST_VERSION) {
                 view.RemovePaymentRequest(hash);
                 LogPrintf("%s: Removed payment request %s\n", __func__, hash.ToString());
             }
-            else if(fDAOConsultations && tx.nVersion == CTransaction::CONSULTATION_VERSION)
+            else if(fDAOConsultations && (tx.nVersion&0xF) == CTransaction::CONSULTATION_VERSION)
             {
                 view.RemoveConsultation(hash);
                 LogPrintf("%s: Removed consultation %s\n", __func__, hash.ToString());
             }
-            else if(fDAOConsultations && tx.nVersion == CTransaction::ANSWER_VERSION)
+            else if(fDAOConsultations && (tx.nVersion&0xF) == CTransaction::ANSWER_VERSION)
             {
                 CConsultationAnswer answer;
                 if (TxToConsultationAnswer(tx.strDZeel, hash, block.GetHash(), answer))
@@ -2568,48 +2688,92 @@ bool DisconnectBlock(const CBlock& block, CValidationState& state, const CBlockI
                 const CTxOut &out = tx.vout[k];
 
                 if (out.scriptPubKey.IsPayToScriptHash()) {
-                    vector<unsigned char> hashBytes(out.scriptPubKey.begin()+2, out.scriptPubKey.begin()+22);
+                    vector<unsigned char> hashBytes_(out.scriptPubKey.begin()+2, out.scriptPubKey.begin()+22);
+
+                    uint160 hashBytes(hashBytes_);
 
                     // undo receiving activity
-                    addressIndex.push_back(make_pair(CAddressIndexKey(2, uint160(hashBytes), pindex->nHeight, i, hash, k, false), out.nValue));
+                    addressIndex.push_back(make_pair(CAddressIndexKey(2, hashBytes, pindex->nHeight, i, hash, k, false), out.nValue));
 
                     // undo unspent index
-                    addressUnspentIndex.push_back(make_pair(CAddressUnspentKey(2, uint160(hashBytes), hash, k), CAddressUnspentValue()));
+                    addressUnspentIndex.push_back(make_pair(CAddressUnspentKey(2, hashBytes, hash, k), CAddressUnspentValue()));
 
+                    CAddressHistoryKey addressHistoryKey(hashBytes, hashBytes, pindex->nHeight, i, hash, tx.nTime);
 
-                }  else if (out.scriptPubKey.IsPayToPublicKey() || out.scriptPubKey.IsColdStaking() || out.scriptPubKey.IsColdStakingv2()) {
+                    if (addressHistoryMap.count(addressHistoryKey) == 0)
+                        addressHistoryMap.insert(std::make_pair(addressHistoryKey, CAddressHistoryValue()));
+
+                }  else if (out.scriptPubKey.IsPayToPublicKey() || out.scriptPubKey.IsPayToPublicKeyHash()) {
                     uint160 hashBytes;
+                    uint160 hashBytesStaking;
+                    uint160 hashBytesVoting;
                     int type = 0;
                     CTxDestination destination;
                     ExtractDestination(out.scriptPubKey, destination);
                     CNavCoinAddress address(destination);
-                    if (out.scriptPubKey.IsColdStaking() || out.scriptPubKey.IsColdStakingv2())
-                        address.GetSpendingAddress(address);
                     address.GetIndexKey(hashBytes, type);
 
                     // undo spending activity
-                    addressIndex.push_back(make_pair(CAddressIndexKey(type, hashBytes, pindex->nHeight, i, hash, k, true), out.nValue));
+                    addressIndex.push_back(make_pair(CAddressIndexKey(type, hashBytes, pindex->nHeight, i, hash, k, false), out.nValue));
 
                     // restore unspent index
                     addressUnspentIndex.push_back(make_pair(CAddressUnspentKey(type, hashBytes, hash, k), CAddressUnspentValue()));
 
+                    CAddressHistoryKey addressHistoryKey(hashBytes, hashBytes, pindex->nHeight, i, hash, tx.nTime);
 
-                } else if (out.scriptPubKey.IsPayToPublicKeyHash()) {
-                    uint160 hashBytes;
-                    CTxDestination destination;
+                    if (addressHistoryMap.count(addressHistoryKey) == 0)
+                        addressHistoryMap.insert(std::make_pair(addressHistoryKey, CAddressHistoryValue()));
+
+                } else if (out.scriptPubKey.IsColdStaking() || out.scriptPubKey.IsColdStakingv2()) {
+                    CNavCoinAddress addressStaking, addressVoting, addressSpending;
+                    uint160 hashBytes, hashBytesSpending, hashBytesStaking, hashBytesVoting;
                     int type = 0;
 
+                    CTxDestination destination;
                     ExtractDestination(out.scriptPubKey, destination);
                     CNavCoinAddress address(destination);
-
                     address.GetIndexKey(hashBytes, type);
+                    address.GetSpendingAddress(addressSpending);
+                    addressSpending.GetIndexKey(hashBytesSpending, type);
 
-                    // undo receiving activity
-                    addressIndex.push_back(make_pair(CAddressIndexKey(1, uint160(hashBytes), pindex->nHeight, i, hash, k, false), out.nValue));
+                    // undo spending activity
+                    addressIndex.push_back(make_pair(CAddressIndexKey(type, hashBytes, pindex->nHeight, i, hash, k, false), out.nValue));
 
-                    // undo unspent index
-                    addressUnspentIndex.push_back(make_pair(CAddressUnspentKey(1, uint160(hashBytes), hash, k), CAddressUnspentValue()));
+                    // restore unspent index
+                    addressUnspentIndex.push_back(make_pair(CAddressUnspentKey(type, hashBytesSpending, hash, k), CAddressUnspentValue()));
 
+                    CAddressHistoryKey addressHistoryKey(uint160(hashBytes), uint160(hashBytesSpending), pindex->nHeight, i, hash, tx.nTime);
+                    CAddressHistoryKey addressHistoryKey2(hashBytesSpending, hashBytesSpending, pindex->nHeight, i, hash, tx.nTime);
+
+                    if (addressHistoryMap.count(addressHistoryKey) == 0)
+                        addressHistoryMap.insert(std::make_pair(addressHistoryKey, CAddressHistoryValue()));
+
+                    if (addressHistoryMap.count(addressHistoryKey2) == 0)
+                        addressHistoryMap.insert(std::make_pair(addressHistoryKey2, CAddressHistoryValue()));
+
+                    if (out.scriptPubKey.IsColdStaking() || out.scriptPubKey.IsColdStakingv2())
+                    {
+                        address.GetStakingAddress(addressStaking);
+                        addressStaking.GetIndexKey(hashBytesStaking, type);
+                        CAddressHistoryKey addressHistoryKeyStaking(uint160(hashBytes), uint160(hashBytesStaking), pindex->nHeight, i, hash, tx.nTime);
+                        CAddressHistoryKey addressHistoryKeyStaking2(hashBytesStaking, hashBytesStaking, pindex->nHeight, i, hash, tx.nTime);
+                        if (addressHistoryMap.count(addressHistoryKeyStaking) == 0)
+                            addressHistoryMap.insert(std::make_pair(addressHistoryKeyStaking, CAddressHistoryValue()));
+                        if (addressHistoryMap.count(addressHistoryKeyStaking2) == 0)
+                            addressHistoryMap.insert(std::make_pair(addressHistoryKeyStaking2, CAddressHistoryValue()));
+                    }
+
+                    if (out.scriptPubKey.IsColdStakingv2())
+                    {
+                        address.GetVotingAddress(addressVoting);
+                        addressVoting.GetIndexKey(hashBytesVoting, type);
+                        CAddressHistoryKey addressHistoryKeyVoting(uint160(hashBytes), uint160(hashBytesVoting), pindex->nHeight, i, hash, tx.nTime);
+                        CAddressHistoryKey addressHistoryKeyVoting2(hashBytesVoting, hashBytesVoting, pindex->nHeight, i, hash, tx.nTime);
+                        if (addressHistoryMap.count(addressHistoryKeyVoting) == 0)
+                            addressHistoryMap.insert(std::make_pair(addressHistoryKeyVoting, CAddressHistoryValue()));
+                        if (addressHistoryMap.count(addressHistoryKeyVoting2) == 0)
+                            addressHistoryMap.insert(std::make_pair(addressHistoryKeyVoting2, CAddressHistoryValue()));
+                    }
                 } else {
                     continue;
                 }
@@ -2631,8 +2795,11 @@ bool DisconnectBlock(const CBlock& block, CValidationState& state, const CBlockI
         if (outsBlock.nVersion < 0)
             outs->nVersion = outsBlock.nVersion;
 
+        if (outs->vout.size() != outsBlock.vout.size())
+            fClean = fClean && error("DisconnectBlock(): added transaction mismatch? different output vector size");
+
         if (*outs != outsBlock)
-            fClean = fClean && error("DisconnectBlock(): added transaction mismatch? database corrupted");
+            fClean = fClean && error("DisconnectBlock(): added transaction mismatch? database corrupted %d", *outs != outsBlock);
 
         // remove outputs
         outs->Clear();
@@ -2659,7 +2826,8 @@ bool DisconnectBlock(const CBlock& block, CValidationState& state, const CBlockI
                 if (fAddressIndex) {
                     const CTxOut &prevout = view.GetOutputFor(tx.vin[j]);
                     if (prevout.scriptPubKey.IsPayToScriptHash()) {
-                        vector<unsigned char> hashBytes(prevout.scriptPubKey.begin()+2, prevout.scriptPubKey.begin()+22);
+                        vector<unsigned char> hashBytes_(prevout.scriptPubKey.begin()+2, prevout.scriptPubKey.begin()+22);
+                        uint160 hashBytes(hashBytes_);
 
                         // undo spending activity
                         addressIndex.push_back(make_pair(CAddressIndexKey(2, uint160(hashBytes), pindex->nHeight, i, hash, j, true), prevout.nValue * -1));
@@ -2667,15 +2835,18 @@ bool DisconnectBlock(const CBlock& block, CValidationState& state, const CBlockI
                         // restore unspent index
                         addressUnspentIndex.push_back(make_pair(CAddressUnspentKey(2, uint160(hashBytes), input.prevout.hash, input.prevout.n), CAddressUnspentValue(prevout.nValue, prevout.scriptPubKey, undo.nHeight)));
 
+                        CAddressHistoryKey addressHistoryKey(hashBytes, hashBytes, pindex->nHeight, i, hash, tx.nTime);
 
-                    } else if (prevout.scriptPubKey.IsPayToPublicKey() || prevout.scriptPubKey.IsColdStaking() || prevout.scriptPubKey.IsColdStakingv2()) {
+                        if (addressHistoryMap.count(addressHistoryKey) == 0)
+                            addressHistoryMap.insert(std::make_pair(addressHistoryKey, CAddressHistoryValue()));
+                    }
+                    else if (prevout.scriptPubKey.IsPayToPublicKey() || prevout.scriptPubKey.IsPayToPublicKeyHash())
+                    {
                         uint160 hashBytes;
                         int type = 0;
                         CTxDestination destination;
                         ExtractDestination(prevout.scriptPubKey, destination);
                         CNavCoinAddress address(destination);
-                        if (prevout.scriptPubKey.IsColdStaking() || prevout.scriptPubKey.IsColdStakingv2())
-                            address.GetSpendingAddress(address);
                         address.GetIndexKey(hashBytes, type);
 
                         // undo spending activity
@@ -2684,23 +2855,66 @@ bool DisconnectBlock(const CBlock& block, CValidationState& state, const CBlockI
                         // restore unspent index
                         addressUnspentIndex.push_back(make_pair(CAddressUnspentKey(type, uint160(hashBytes), input.prevout.hash, input.prevout.n), CAddressUnspentValue(prevout.nValue, prevout.scriptPubKey, undo.nHeight)));
 
+                        CAddressHistoryKey addressHistoryKey(hashBytes, hashBytes, pindex->nHeight, i, hash, tx.nTime);
 
-                    } else if (prevout.scriptPubKey.IsPayToPublicKeyHash()) {
-                        uint160 hashBytes;
-                        CTxDestination destination;
+                        if (addressHistoryMap.count(addressHistoryKey) == 0)
+                            addressHistoryMap.insert(std::make_pair(addressHistoryKey, CAddressHistoryValue()));
+                    }
+                    else if (prevout.scriptPubKey.IsColdStaking() || prevout.scriptPubKey.IsColdStakingv2())
+                    {
+                        CNavCoinAddress addressStaking, addressVoting, addressSpending;
+
+                        uint160 hashBytes, hashBytesSpending, hashBytesStaking, hashBytesVoting;
+
                         int type = 0;
+                        CTxDestination destination;
 
                         ExtractDestination(prevout.scriptPubKey, destination);
                         CNavCoinAddress address(destination);
 
+                        if (prevout.scriptPubKey.IsColdStaking() || prevout.scriptPubKey.IsColdStakingv2())
+                            address.GetSpendingAddress(addressSpending);
                         address.GetIndexKey(hashBytes, type);
+                        addressSpending.GetIndexKey(hashBytesSpending, type);
 
                         // undo spending activity
-                        addressIndex.push_back(make_pair(CAddressIndexKey(1, hashBytes, pindex->nHeight, i, hash, j, true), prevout.nValue * -1));
+                        addressIndex.push_back(make_pair(CAddressIndexKey(type, uint160(hashBytes), pindex->nHeight, i, hash, j, true), prevout.nValue * -1));
 
                         // restore unspent index
-                        addressUnspentIndex.push_back(make_pair(CAddressUnspentKey(1, hashBytes, input.prevout.hash, input.prevout.n), CAddressUnspentValue(prevout.nValue, prevout.scriptPubKey, undo.nHeight)));
+                        addressUnspentIndex.push_back(make_pair(CAddressUnspentKey(type, uint160(hashBytesSpending), input.prevout.hash, input.prevout.n), CAddressUnspentValue(prevout.nValue, prevout.scriptPubKey, undo.nHeight)));
 
+                        CAddressHistoryKey addressHistoryKey(hashBytesSpending, hashBytesSpending, pindex->nHeight, i, hash, tx.nTime);
+                        CAddressHistoryKey addressHistoryKey2(uint160(hashBytes), uint160(hashBytesSpending), pindex->nHeight, i, hash, tx.nTime);
+
+                        if (addressHistoryMap.count(addressHistoryKey) == 0)
+                            addressHistoryMap.insert(std::make_pair(addressHistoryKey, CAddressHistoryValue()));
+
+                        if (addressHistoryMap.count(addressHistoryKey2) == 0)
+                            addressHistoryMap.insert(std::make_pair(addressHistoryKey2, CAddressHistoryValue()));
+
+                        if (prevout.scriptPubKey.IsColdStaking() || prevout.scriptPubKey.IsColdStakingv2())
+                        {
+                            address.GetStakingAddress(addressStaking);
+                            addressStaking.GetIndexKey(hashBytesStaking, type);
+                            CAddressHistoryKey addressHistoryKeyStaking(uint160(hashBytes), uint160(hashBytesStaking), pindex->nHeight, i, hash, tx.nTime);
+                            CAddressHistoryKey addressHistoryKeyStaking2(hashBytesStaking, hashBytesStaking, pindex->nHeight, i, hash, tx.nTime);
+                            if (addressHistoryMap.count(addressHistoryKeyStaking) == 0)
+                                addressHistoryMap.insert(std::make_pair(addressHistoryKeyStaking, CAddressHistoryValue()));
+                            if (addressHistoryMap.count(addressHistoryKeyStaking2) == 0)
+                                addressHistoryMap.insert(std::make_pair(addressHistoryKeyStaking2, CAddressHistoryValue()));
+                        }
+
+                        if (prevout.scriptPubKey.IsColdStakingv2())
+                        {
+                            address.GetVotingAddress(addressVoting);
+                            addressVoting.GetIndexKey(hashBytesVoting, type);
+                            CAddressHistoryKey addressHistoryKeyVoting(uint160(hashBytes), uint160(hashBytesVoting), pindex->nHeight, i, hash, tx.nTime);
+                            CAddressHistoryKey addressHistoryKeyVoting2(hashBytesVoting, hashBytesVoting, pindex->nHeight, i, hash, tx.nTime);
+                            if (addressHistoryMap.count(addressHistoryKeyVoting) == 0)
+                                addressHistoryMap.insert(std::make_pair(addressHistoryKeyVoting, CAddressHistoryValue()));
+                            if (addressHistoryMap.count(addressHistoryKeyVoting2) == 0)
+                                addressHistoryMap.insert(std::make_pair(addressHistoryKeyVoting2, CAddressHistoryValue()));
+                        }
                     } else {
                         continue;
                     }
@@ -2817,9 +3031,12 @@ bool DisconnectBlock(const CBlock& block, CValidationState& state, const CBlockI
     }
 
     bool fStake = block.IsProofOfStake();
+    bool fStakerIsColdStakingv2 = false;
     bool fVoteCacheState = IsVoteCacheStateEnabled(pindex->pprev, Params().GetConsensus());
+    if (fStake && block.vtx[1].vout[1].scriptPubKey.IsColdStakingv2())
+        fStakerIsColdStakingv2 = true;
 
-    if (fStake && fVoteCacheState && fCFund)
+    if (fStake && fVoteCacheState && fCFund && !(pindex->nNonce & 1 && !fStakerIsColdStakingv2))
     {
         CVoteMap baseMap;
 
@@ -2855,6 +3072,13 @@ bool DisconnectBlock(const CBlock& block, CValidationState& state, const CBlockI
     if (fAddressIndex) {
         if (!pblocktree->EraseAddressIndex(addressIndex)) {
             return AbortNode(state, "Failed to delete address index");
+        }
+        for (auto &it: addressHistoryMap)
+        {
+            addressHistory.push_back(std::make_pair(it.first, it.second));
+        }
+        if (!pblocktree->EraseAddressHistory(addressHistory)) {
+            return AbortNode(state, "Failed to delete address history");
         }
         if (!pblocktree->UpdateAddressUnspentIndex(addressUnspentIndex)) {
             return AbortNode(state, "Failed to write address unspent index");
@@ -2950,6 +3174,18 @@ int32_t ComputeBlockVersion(const CBlockIndex* pindexPrev, const Consensus::Para
 
     if(IsDaoConsensusEnabled(pindexPrev,Params().GetConsensus()))
         nVersion |= nDaoConsensusVersionMask;
+
+#if CLIENT_BUILD_IS_TEST_RELEASE
+    bool fTestnet = GetBoolArg("-testnet", true);
+#else
+    bool fTestnet = GetBoolArg("-testnet", false);
+#endif
+
+    if(IsExcludeEnabled(pindexPrev,Params().GetConsensus()))
+        nVersion |= fTestnet ? 0x08000000 : nDaoExcludeVersionMask;
+
+    if(IsBLSCTEnabled(pindexPrev,Params().GetConsensus()))
+        nVersion |= nBLSCTVersionMask;
 
     return nVersion;
 }
@@ -3071,7 +3307,7 @@ bool TxToPaymentRequest(std::string strDZeel, uint256 hash, const uint256& block
     return true;
 }
 
-bool TxToConsultation(std::string strDZeel, uint256 hash, const uint256& blockhash, CConsultation& consultation, std::vector<CConsultationAnswer>& vAnswers)
+bool TxToConsultation(std::string strDZeel, uint256 hash, const uint256& blockhash, CBlockIndex* pindexPrev, CConsultation& consultation, std::vector<CConsultationAnswer>& vAnswers)
 {
     UniValue metadata(UniValue::VOBJ);
     try {
@@ -3132,6 +3368,10 @@ bool TxToConsultation(std::string strDZeel, uint256 hash, const uint256& blockha
             answer.parent = hash;
             answer.sAnswer = s;
             answer.nVersion = CConsultationAnswer::BASE_VERSION;
+
+            if (IsExcludeEnabled(pindexPrev,Params().GetConsensus()))
+                answer.nVersion |= CConsultationAnswer::EXCLUDE_VERSION;
+
             answer.txblockhash = blockhash;
             answer.fDirty = true;
 
@@ -3216,13 +3456,19 @@ static int64_t nTimeCallbacks = 0;
 static int64_t nTimeTotal = 0;
 
 bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pindex,
-                  CStateViewCache& view, const CChainParams& chainparams, bool fJustCheck, bool fProofOfStake)
+                  CStateViewCache& view, const CChainParams& chainparams, std::map<int, std::vector<RangeproofEncodedData>>& blsctData,
+                  bool fJustCheck, bool fProofOfStake)
 {
 
     AssertLockHeld(cs_main);
 
     pindex->nCFSupply = pindex->pprev != NULL ? pindex->pprev->nCFSupply : 0;
     pindex->nCFLocked = pindex->pprev != NULL ? pindex->pprev->nCFLocked : 0;
+    pindex->nPrivateMoneySupply = pindex->pprev != NULL ? pindex->pprev->nPrivateMoneySupply : 0;
+    pindex->nPublicMoneySupply = pindex->pprev != NULL ? pindex->pprev->nPublicMoneySupply : 0;
+
+    CAmount nCreated = 0;
+    CAmount nMovedToPublic = 0;
 
     if (block.IsProofOfStake())
     {
@@ -3380,8 +3626,11 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
     CBlockUndo blockundo;
 
     std::vector<uint256> vOrphanErase;
+    std::vector<CTxIn> vBLSConflicted;
     std::vector<int> prevheights;
     CAmount nFees = 0;
+    CAmount nBLSCTPublicFees = 0;
+    CAmount nBLSCTPrivateFees = 0;
     int nInputs = 0;
     int64_t nSigOpsCost = 0;
     CDiskTxPos pos(pindex->GetBlockPos(), GetSizeOfCompactSize(block.vtx.size()));
@@ -3389,6 +3638,8 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
     vPos.reserve(block.vtx.size());
     blockundo.vtxundo.reserve(block.vtx.size() - 1);
     std::vector<std::pair<CAddressIndexKey, CAmount> > addressIndex;
+    std::vector<std::pair<CAddressHistoryKey, CAddressHistoryValue> > addressHistory;
+    std::map<CAddressHistoryKey, CAddressHistoryValue> addressHistoryMap;
     std::vector<std::pair<CAddressUnspentKey, CAddressUnspentValue> > addressUnspentIndex;
     std::vector<std::pair<CSpentIndexKey, CSpentIndexValue> > spentIndex;
 
@@ -3396,6 +3647,7 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
     std::vector<PrecomputedTransactionData> txdata;
     txdata.reserve(block.vtx.size()); // Required so that pointers to individual PrecomputedTransactionData don't get invalidated
 
+    CAmount nMovedToBLS = 0;
     bool fStake = block.IsProofOfStake();
     bool fVoteCacheState = IsVoteCacheStateEnabled(pindex->pprev, chainparams.GetConsensus());
     bool fStakerScript = false;
@@ -3426,7 +3678,10 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
     }
 
     if (fStake && block.vtx[1].vout[1].scriptPubKey.IsColdStakingv2())
+    {
+        pindex->SetColdStakeV2();
         fStakerIsColdStakingv2 = true;
+    }
 
     std::map<std::pair<std::vector<unsigned char>, uint256>, int> votes;
 
@@ -3439,7 +3694,7 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
 
         nInputs += tx.vin.size();
 
-        if (fCFund || fDAOConsultations)
+        if ((fCFund || fDAOConsultations) && !(pindex->nNonce & 1 && !fStakerIsColdStakingv2))
         {
             // Add Votes from the block coinbase or dao vote txs if enabled
             if((tx.IsCoinBase() && !fStakerIsColdStakingv2) || (fStake && fDaoTx && i > 1) || (!fStake && fDaoTx && i > 0))
@@ -3460,10 +3715,29 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
                 if (fDaoTx)
                 {
                     const CTransaction &txRead = tx;
+                    bool fValid = true;
 
                     if (!GetTransaction(txRead.vin[0].prevout.hash, txPrev, Params().GetConsensus(), hashBlock, view, true))
                     {
-                        return error("%s: Could not find %s to read voter script.\n", __func__, txRead.vin[0].prevout.hash.ToString());
+                        fValid = false;
+                    }
+
+                    if (!fValid)
+                    {
+                        bool fFoundInTheSameBlock = false;
+
+                        for (unsigned int i_ = 0; i_ < block.vtx.size(); i_++)
+                        {
+                            if (txRead.vin[0].prevout.hash == block.vtx[i_].hash)
+                            {
+                                txPrev = block.vtx[i_];
+                                fFoundInTheSameBlock = true;
+                                break;
+                            }
+                        }
+
+                        if (!fFoundInTheSameBlock)
+                            return error("%s: Could not find %s to read voter script.\n", __func__, txRead.vin[0].prevout.hash.ToString());
                     }
 
                     if(!txPrev.vout[txRead.vin[0].prevout.n].scriptPubKey.GetStakerScript(voterScript))
@@ -3609,22 +3883,22 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
 
             GetVersionMask(nVersionMaskProposal, nVersionMaskPaymentRequest, nVersionMaskConsultation, nVersionMaskConsultationAnswer, pindex->pprev);
 
-            if(fCFund && tx.nVersion == CTransaction::PROPOSAL_VERSION)
+            if((tx.nVersion&0xF) == CTransaction::PROPOSAL_VERSION) // Community Fund Proposal
             {
                 if(!IsValidProposal(tx, view, nVersionMaskProposal))
                     return state.DoS(10, false, REJECT_INVALID, "bad-cfund-proposal");
             }
-            else if(fCFund && tx.nVersion == CTransaction::PAYMENT_REQUEST_VERSION)
+            else if((tx.nVersion&0xF) == CTransaction::PAYMENT_REQUEST_VERSION) // Community Fund Payment Request
             {
                 if(!IsValidPaymentRequest(tx, view, nVersionMaskPaymentRequest))
                     return state.DoS(10, false, REJECT_INVALID, "bad-cfund-payment-request");
             }
-            else if(fDAOConsultations && tx.nVersion == CTransaction::CONSULTATION_VERSION)
+            else if(fDAOConsultations && (tx.nVersion&0xF) == CTransaction::CONSULTATION_VERSION)
             {
                 if(!IsValidConsultation(tx, view, nVersionMaskConsultation, pindex->pprev))
                     return state.DoS(10, false, REJECT_INVALID, "bad-dao-consultation");
             }
-            else if(fDAOConsultations && tx.nVersion == CTransaction::ANSWER_VERSION)
+            else if(fDAOConsultations && (tx.nVersion&0xF) == CTransaction::ANSWER_VERSION)
             {
                 if(!IsValidConsultationAnswer(tx, view, nVersionMaskConsultationAnswer, pindex->pprev))
                     return state.DoS(10, false, REJECT_INVALID, "bad-dao-consultation-answer");
@@ -3647,6 +3921,8 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
 
             // Which orphan pool entries must we evict?
             for (size_t j = 0; j < tx.vin.size(); j++) {
+                if (tx.IsBLSInput())
+                    vBLSConflicted.push_back(tx.vin[j]);
                 auto itByPrev = mapOrphanTransactionsByPrev.find(tx.vin[j].prevout);
                 if (itByPrev == mapOrphanTransactionsByPrev.end()) continue;
                 for (auto mi = itByPrev->second.begin(); mi != itByPrev->second.end(); ++mi) {
@@ -3668,24 +3944,136 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
                     const CTxIn input = tx.vin[j];
                     const CTxOut &prevout = view.GetOutputFor(tx.vin[j]);
                     uint160 hashBytes;
-                    int addressType;
+                    int addressType, dummyType;
 
                     if (prevout.scriptPubKey.IsPayToScriptHash()) {
-                        hashBytes = uint160(vector <unsigned char>(prevout.scriptPubKey.begin()+2, prevout.scriptPubKey.begin()+22));
+                        vector<unsigned char> hashBytes_(prevout.scriptPubKey.begin()+2, prevout.scriptPubKey.begin()+22);
+                        uint160 hashBytes(hashBytes_);
                         addressType = 2;
-                    } else if (prevout.scriptPubKey.IsPayToPublicKeyHash()) {
+
+                        CAddressHistoryKey addressHistoryKey(hashBytes, hashBytes, pindex->nHeight, i, txhash, tx.nTime);
+
+                        if (addressHistoryMap.count(addressHistoryKey) == 0)
+                            addressHistoryMap.insert(std::make_pair(addressHistoryKey, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                        addressHistoryMap[addressHistoryKey].spendable += prevout.nValue * -1;
+                        addressHistoryMap[addressHistoryKey].stakable += prevout.nValue * -1;
+                        addressHistoryMap[addressHistoryKey].voting_weight += prevout.nValue * -1;
+                    } else if (prevout.scriptPubKey.IsPayToPublicKeyHash() || prevout.scriptPubKey.IsPayToPublicKey()) {
                         CTxDestination destination;
                         ExtractDestination(prevout.scriptPubKey, destination);
                         CNavCoinAddress address(destination);
                         address.GetIndexKey(hashBytes, addressType);
-                    } else if (prevout.scriptPubKey.IsPayToPublicKey() || prevout.scriptPubKey.IsColdStaking() || prevout.scriptPubKey.IsColdStakingv2()) {
+
+                        CAddressHistoryKey addressHistoryKey(hashBytes, hashBytes, pindex->nHeight, i, txhash, tx.nTime);
+
+                        if (addressHistoryMap.count(addressHistoryKey) == 0)
+                            addressHistoryMap.insert(std::make_pair(addressHistoryKey, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                        addressHistoryMap[addressHistoryKey].spendable += prevout.nValue * -1;
+                        addressHistoryMap[addressHistoryKey].stakable += prevout.nValue * -1;
+                        addressHistoryMap[addressHistoryKey].voting_weight += prevout.nValue * -1;
+                    } else if (prevout.scriptPubKey.IsColdStaking())
+                    {
                         CTxDestination destination;
+                        uint160 hashBytesSpending, hashBytesStaking;
+                        CNavCoinAddress addressStaking, addresssSpending;
+
                         ExtractDestination(prevout.scriptPubKey, destination);
                         CNavCoinAddress address(destination);
-                        if (prevout.scriptPubKey.IsColdStaking() || prevout.scriptPubKey.IsColdStakingv2())
-                            address.GetSpendingAddress(address);
+                        address.GetSpendingAddress(addresssSpending);
                         address.GetIndexKey(hashBytes, addressType);
-                    } else {
+                        addresssSpending.GetIndexKey(hashBytesSpending, addressType);
+
+                        CAddressHistoryKey addressHistoryKey(uint160(hashBytes), uint160(hashBytesSpending), pindex->nHeight, i, txhash, tx.nTime);
+                        CAddressHistoryKey addressHistoryKey2(hashBytesSpending, hashBytesSpending, pindex->nHeight, i, txhash, tx.nTime);
+
+                        if (addressHistoryMap.count(addressHistoryKey) == 0)
+                            addressHistoryMap.insert(std::make_pair(addressHistoryKey, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                        if (addressHistoryMap.count(addressHistoryKey2) == 0)
+                            addressHistoryMap.insert(std::make_pair(addressHistoryKey2, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                        addressHistoryMap[addressHistoryKey].spendable += prevout.nValue * -1;
+                        addressHistoryMap[addressHistoryKey2].spendable += prevout.nValue * -1;
+
+                        address.GetStakingAddress(addressStaking);
+                        addressStaking.GetIndexKey(hashBytesStaking, dummyType);
+
+                        CAddressHistoryKey addressHistoryKeyStaking(uint160(hashBytes), uint160(hashBytesStaking), pindex->nHeight, i, txhash, tx.nTime);
+                        CAddressHistoryKey addressHistoryKeyStaking2(hashBytesStaking, hashBytesStaking, pindex->nHeight, i, txhash, tx.nTime);
+
+                        if (addressHistoryMap.count(addressHistoryKeyStaking) == 0)
+                            addressHistoryMap.insert(std::make_pair(addressHistoryKeyStaking, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                        if (addressHistoryMap.count(addressHistoryKeyStaking2) == 0)
+                            addressHistoryMap.insert(std::make_pair(addressHistoryKeyStaking2, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                        addressHistoryMap[addressHistoryKeyStaking].stakable += prevout.nValue * -1;
+                        addressHistoryMap[addressHistoryKeyStaking].voting_weight += prevout.nValue * -1;
+                        addressHistoryMap[addressHistoryKeyStaking2].stakable += prevout.nValue * -1;
+                        addressHistoryMap[addressHistoryKeyStaking2].voting_weight += prevout.nValue * -1;
+
+                        hashBytes = hashBytesSpending;
+                    }
+                    else if (prevout.scriptPubKey.IsColdStakingv2())
+                    {
+                        CTxDestination destination;
+                        uint160 hashBytesStaking, hashBytesVoting, hashBytesSpending;
+                        CNavCoinAddress addressStaking, addressVoting, addresssSpending;
+
+                        ExtractDestination(prevout.scriptPubKey, destination);
+                        CNavCoinAddress address(destination);
+                        address.GetSpendingAddress(addresssSpending);
+                        address.GetIndexKey(hashBytes, addressType);
+                        addresssSpending.GetIndexKey(hashBytesSpending, addressType);
+
+                        CAddressHistoryKey addressHistoryKey(uint160(hashBytes), uint160(hashBytesSpending), pindex->nHeight, i, txhash, tx.nTime);
+                        CAddressHistoryKey addressHistoryKey2(hashBytesSpending, hashBytesSpending, pindex->nHeight, i, txhash, tx.nTime);
+
+                        if (addressHistoryMap.count(addressHistoryKey) == 0)
+                            addressHistoryMap.insert(std::make_pair(addressHistoryKey, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                        if (addressHistoryMap.count(addressHistoryKey2) == 0)
+                            addressHistoryMap.insert(std::make_pair(addressHistoryKey2, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                        addressHistoryMap[addressHistoryKey].spendable += prevout.nValue * -1;
+                        addressHistoryMap[addressHistoryKey2].spendable += prevout.nValue * -1;
+
+                        address.GetStakingAddress(addressStaking);
+                        addressStaking.GetIndexKey(hashBytesStaking, dummyType);
+
+                        CAddressHistoryKey addressHistoryKeyStaking(uint160(hashBytes), uint160(hashBytesStaking), pindex->nHeight, i, txhash, tx.nTime);
+                        CAddressHistoryKey addressHistoryKeyStaking2(hashBytesStaking, hashBytesStaking, pindex->nHeight, i, txhash, tx.nTime);
+
+                        if (addressHistoryMap.count(addressHistoryKeyStaking) == 0)
+                            addressHistoryMap.insert(std::make_pair(addressHistoryKeyStaking, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                        if (addressHistoryMap.count(addressHistoryKeyStaking2) == 0)
+                            addressHistoryMap.insert(std::make_pair(addressHistoryKeyStaking2, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                        addressHistoryMap[addressHistoryKeyStaking].stakable += prevout.nValue * -1;
+                        addressHistoryMap[addressHistoryKeyStaking2].stakable += prevout.nValue * -1;
+
+                        address.GetVotingAddress(addressVoting);
+                        addressVoting.GetIndexKey(hashBytesVoting, dummyType);
+
+                        CAddressHistoryKey addressHistoryKeyVoting(uint160(hashBytes), uint160(hashBytesVoting), pindex->nHeight, i, txhash, tx.nTime);
+                        CAddressHistoryKey addressHistoryKeyVoting2(hashBytesVoting, hashBytesVoting, pindex->nHeight, i, txhash, tx.nTime);
+
+                        if (addressHistoryMap.count(addressHistoryKeyVoting) == 0)
+                            addressHistoryMap.insert(std::make_pair(addressHistoryKeyVoting, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                        if (addressHistoryMap.count(addressHistoryKeyVoting2) == 0)
+                            addressHistoryMap.insert(std::make_pair(addressHistoryKeyVoting2, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                        addressHistoryMap[addressHistoryKeyVoting].voting_weight += prevout.nValue * -1;
+                        addressHistoryMap[addressHistoryKeyVoting2].voting_weight += prevout.nValue * -1;
+
+                        hashBytes = hashBytesSpending;
+                    }
+                    else
+                    {
                         hashBytes.SetNull();
                         addressType = 0;
                     }
@@ -3704,7 +4092,6 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
                         spentIndex.push_back(make_pair(CSpentIndexKey(input.prevout.hash, input.prevout.n), CSpentIndexValue(txhash, j, pindex->nHeight, prevout.nValue, addressType, hashBytes)));
                     }
                 }
-
             }
         }
 
@@ -3719,13 +4106,26 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
 
         txdata.emplace_back(tx);
 
+        if (tx.IsBLSCT())
+            pindex->SetBLSCTTransactions();
+
         if (!tx.IsCoinBase())
         {
             if (!tx.IsCoinStake())
-                nFees += view.GetValueIn(tx) - tx.GetValueOut();
+            {
+                if (tx.IsBLSCT())
+                {
+                    if (tx.IsBLSInput())
+                        nBLSCTPrivateFees += tx.GetFee();
+                    else
+                        nBLSCTPublicFees += tx.GetFee();
+                    nFees += tx.GetFee();
+                }
+                else
+                    nFees += view.GetValueIn(tx) - tx.GetValueOut();
+            }
             if (tx.IsCoinStake())
             {
-
                 nStakeReward = tx.GetValueOut() - view.GetValueIn(tx);
                 pindex->strDZeel = tx.strDZeel;
 
@@ -3764,10 +4164,11 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
             }
 
             std::vector<CScriptCheck> vChecks;
+            std::vector<RangeproofEncodedData> dummyData;
             bool fCacheResults = fJustCheck; /* Don't cache results if we're actually connecting blocks (still consult the cache, though) */
-            if (!CheckInputs(tx, state, view, fScriptChecks, flags, fCacheResults, txdata[i], nScriptCheckThreads ? &vChecks : nullptr))
+            if (!CheckInputs(tx, state, view, fScriptChecks, flags, fCacheResults, tx.IsCTOutput()?blsctData[i]:dummyData, txdata[i], nScriptCheckThreads ? &vChecks : nullptr))
                 return error("ConnectBlock(): CheckInputs on %s failed with %s",
-                    tx.GetHash().ToString(), FormatStateMessage(state));
+                             tx.GetHash().ToString(), FormatStateMessage(state));
             control.Add(vChecks);
 
         } else {
@@ -3781,7 +4182,8 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
                 const CTxOut &out = tx.vout[k];
 
                 if (out.scriptPubKey.IsPayToScriptHash()) {
-                    vector<unsigned char> hashBytes(out.scriptPubKey.begin()+2, out.scriptPubKey.begin()+22);
+                    vector<unsigned char> hashBytes_(out.scriptPubKey.begin()+2, out.scriptPubKey.begin()+22);
+                    uint160 hashBytes(hashBytes_);
 
                     // record receiving activity
                     addressIndex.push_back(make_pair(CAddressIndexKey(2, uint160(hashBytes), pindex->nHeight, i, txhash, k, false), out.nValue));
@@ -3789,14 +4191,131 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
                     // record unspent output
                     addressUnspentIndex.push_back(make_pair(CAddressUnspentKey(2, uint160(hashBytes), txhash, k), CAddressUnspentValue(out.nValue, out.scriptPubKey, pindex->nHeight)));
 
-                } else if (out.scriptPubKey.IsPayToPublicKey() || out.scriptPubKey.IsColdStaking() || out.scriptPubKey.IsColdStakingv2()) {
+                    CAddressHistoryKey addressHistoryKey(hashBytes, hashBytes, pindex->nHeight, i, txhash, tx.nTime);
+
+                    if (addressHistoryMap.count(addressHistoryKey) == 0)
+                        addressHistoryMap.insert(std::make_pair(addressHistoryKey, CAddressHistoryValue()));
+
+                    addressHistoryMap[addressHistoryKey].spendable += out.nValue;
+                    addressHistoryMap[addressHistoryKey].stakable += out.nValue;
+                    addressHistoryMap[addressHistoryKey].voting_weight += out.nValue;
+                } else if (out.scriptPubKey.IsColdStaking())
+                {
+                    uint160 hashBytes, hashBytesStaking, hashBytesSpending;
+                    CNavCoinAddress addressSpending, addressStaking;
+                    int type = 0;
+                    CTxDestination destination;
+                    ExtractDestination(out.scriptPubKey, destination);
+                    CNavCoinAddress address(destination);
+                    address.GetSpendingAddress(addressSpending);
+                    address.GetIndexKey(hashBytes, type);
+                    addressSpending.GetIndexKey(hashBytesSpending, type);
+
+                    // record spending activity
+                    addressIndex.push_back(make_pair(CAddressIndexKey(type, uint160(hashBytes), pindex->nHeight, i, txhash, k, false), out.nValue));
+
+                    // record unspent output
+                    addressUnspentIndex.push_back(make_pair(CAddressUnspentKey(type, uint160(hashBytesSpending), txhash, k), CAddressUnspentValue(out.nValue, out.scriptPubKey, pindex->nHeight)));
+                    CAddressHistoryKey addressHistoryKey(uint160(hashBytes), uint160(hashBytesSpending), pindex->nHeight, i, txhash, tx.nTime);
+                    CAddressHistoryKey addressHistoryKey2(hashBytesSpending, hashBytesSpending, pindex->nHeight, i, txhash, tx.nTime);
+
+                    if (addressHistoryMap.count(addressHistoryKey) == 0)
+                        addressHistoryMap.insert(std::make_pair(addressHistoryKey, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                    if (addressHistoryMap.count(addressHistoryKey2) == 0)
+                        addressHistoryMap.insert(std::make_pair(addressHistoryKey2, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                    addressHistoryMap[addressHistoryKey].spendable += out.nValue;
+                    addressHistoryMap[addressHistoryKey2].spendable += out.nValue;
+
+                    address.GetStakingAddress(addressStaking);
+                    addressStaking.GetIndexKey(hashBytesStaking, type);
+
+                    CAddressHistoryKey addressHistoryKeyStaking(uint160(hashBytes), uint160(hashBytesStaking), pindex->nHeight, i, txhash, tx.nTime);
+                    CAddressHistoryKey addressHistoryKeyStaking2(hashBytesStaking, hashBytesStaking, pindex->nHeight, i, txhash, tx.nTime);
+
+                    if (addressHistoryMap.count(addressHistoryKeyStaking) == 0)
+                        addressHistoryMap.insert(std::make_pair(addressHistoryKeyStaking, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                    if (addressHistoryMap.count(addressHistoryKeyStaking2) == 0)
+                        addressHistoryMap.insert(std::make_pair(addressHistoryKeyStaking2, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                    addressHistoryMap[addressHistoryKeyStaking].stakable += out.nValue;
+                    addressHistoryMap[addressHistoryKeyStaking].voting_weight += out.nValue;
+
+                    addressHistoryMap[addressHistoryKeyStaking2].stakable += out.nValue;
+                    addressHistoryMap[addressHistoryKeyStaking2].voting_weight += out.nValue;
+                }
+                else if (out.scriptPubKey.IsColdStakingv2())
+                {
+                    uint160 hashBytes, hashBytesStaking, hashBytesVoting, hashBytesSpending;
+                    CNavCoinAddress addressSpending, addressStaking, addressVoting;
+
+                    int type = 0;
+                    CTxDestination destination;
+                    ExtractDestination(out.scriptPubKey, destination);
+                    CNavCoinAddress address(destination);
+                    address.GetSpendingAddress(addressSpending);
+                    addressSpending.GetIndexKey(hashBytesSpending, type);
+                    address.GetIndexKey(hashBytes, type);
+
+                    // record spending activity
+                    addressIndex.push_back(make_pair(CAddressIndexKey(type, uint160(hashBytes), pindex->nHeight, i, txhash, k, false), out.nValue));
+
+                    // record unspent output
+                    addressUnspentIndex.push_back(make_pair(CAddressUnspentKey(type, uint160(hashBytesSpending), txhash, k), CAddressUnspentValue(out.nValue, out.scriptPubKey, pindex->nHeight)));
+                    CAddressHistoryKey addressHistoryKey(uint160(hashBytes), uint160(hashBytesSpending), pindex->nHeight, i, txhash, tx.nTime);
+                    CAddressHistoryKey addressHistoryKey2(hashBytesSpending, hashBytesSpending, pindex->nHeight, i, txhash, tx.nTime);
+
+                    if (addressHistoryMap.count(addressHistoryKey) == 0)
+                        addressHistoryMap.insert(std::make_pair(addressHistoryKey, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                    addressHistoryMap[addressHistoryKey].spendable += out.nValue;
+
+                    if (addressHistoryMap.count(addressHistoryKey2) == 0)
+                        addressHistoryMap.insert(std::make_pair(addressHistoryKey2, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                    addressHistoryMap[addressHistoryKey2].spendable += out.nValue;
+
+                    address.GetVotingAddress(addressVoting);
+                    addressVoting.GetIndexKey(hashBytesVoting, type);
+
+                    CAddressHistoryKey addressHistoryKeyVoting(uint160(hashBytes), uint160(hashBytesVoting), pindex->nHeight, i, txhash, tx.nTime);
+                    CAddressHistoryKey addressHistoryKeyVoting2(hashBytesVoting, hashBytesVoting, pindex->nHeight, i, txhash, tx.nTime);
+
+                    if (addressHistoryMap.count(addressHistoryKeyVoting) == 0)
+                        addressHistoryMap.insert(std::make_pair(addressHistoryKeyVoting, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                    addressHistoryMap[addressHistoryKeyVoting].voting_weight += out.nValue;
+
+                    if (addressHistoryMap.count(addressHistoryKeyVoting2) == 0)
+                        addressHistoryMap.insert(std::make_pair(addressHistoryKeyVoting2, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                    addressHistoryMap[addressHistoryKeyVoting2].voting_weight += out.nValue;
+
+                    address.GetStakingAddress(addressStaking);
+                    addressStaking.GetIndexKey(hashBytesStaking, type);
+
+                    CAddressHistoryKey addressHistoryKeyStaking(uint160(hashBytes), uint160(hashBytesStaking), pindex->nHeight, i, txhash, tx.nTime);
+                    CAddressHistoryKey addressHistoryKeyStaking2(hashBytesStaking, hashBytesStaking, pindex->nHeight, i, txhash, tx.nTime);
+
+                    if (addressHistoryMap.count(addressHistoryKeyStaking) == 0)
+                        addressHistoryMap.insert(std::make_pair(addressHistoryKeyStaking, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                    addressHistoryMap[addressHistoryKeyStaking].stakable += out.nValue;
+
+                    if (addressHistoryMap.count(addressHistoryKeyStaking2) == 0)
+                        addressHistoryMap.insert(std::make_pair(addressHistoryKeyStaking2, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
+
+                    addressHistoryMap[addressHistoryKeyStaking2].stakable += out.nValue;
+                }
+                else if (out.scriptPubKey.IsPayToPublicKey() || out.scriptPubKey.IsPayToPublicKeyHash())
+                {
                     uint160 hashBytes;
                     int type = 0;
                     CTxDestination destination;
                     ExtractDestination(out.scriptPubKey, destination);
                     CNavCoinAddress address(destination);
-                    if (out.scriptPubKey.IsColdStaking() || out.scriptPubKey.IsColdStakingv2())
-                        address.GetSpendingAddress(address);
                     address.GetIndexKey(hashBytes, type);
 
                     // record spending activity
@@ -3804,22 +4323,14 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
 
                     // record unspent output
                     addressUnspentIndex.push_back(make_pair(CAddressUnspentKey(type, uint160(hashBytes), txhash, k), CAddressUnspentValue(out.nValue, out.scriptPubKey, pindex->nHeight)));
+                    CAddressHistoryKey addressHistoryKey(hashBytes, hashBytes, pindex->nHeight, i, txhash, tx.nTime);
 
-                } else if (out.scriptPubKey.IsPayToPublicKeyHash()) {
-                    uint160 hashBytes;
-                    CTxDestination destination;
-                    int type = 0;
+                    if (addressHistoryMap.count(addressHistoryKey) == 0)
+                        addressHistoryMap.insert(std::make_pair(addressHistoryKey, CAddressHistoryValue(0, 0, 0, tx.IsCoinBase() || tx.IsCoinStake())));
 
-                    ExtractDestination(out.scriptPubKey, destination);
-                    CNavCoinAddress address(destination);
-
-                    address.GetIndexKey(hashBytes, type);
-                    // record receiving activity
-                    addressIndex.push_back(make_pair(CAddressIndexKey(1, hashBytes, pindex->nHeight, i, txhash, k, false), out.nValue));
-
-                    // record unspent output
-                    addressUnspentIndex.push_back(make_pair(CAddressUnspentKey(1, hashBytes, txhash, k), CAddressUnspentValue(out.nValue, out.scriptPubKey, pindex->nHeight)));
-
+                    addressHistoryMap[addressHistoryKey].spendable += out.nValue;
+                    addressHistoryMap[addressHistoryKey].stakable += out.nValue;
+                    addressHistoryMap[addressHistoryKey].voting_weight += out.nValue;
                 } else {
                     continue;
                 }
@@ -3830,6 +4341,11 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
         bool fContribution = false;
         CAmount nProposalFee = 0;
 
+        if (tx.IsCTOutput() && !tx.IsBLSInput() && !tx.IsCoinStake())
+        {
+            nMovedToBLS += view.GetValueIn(tx) - tx.GetValueOut();
+        }
+
         for(const CTxOut& vout: tx.vout)
         {
             if(vout.IsCommunityFundContribution())
@@ -3837,6 +4353,7 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
                 fContribution=true;
                 pindex->nCFSupply += vout.nValue;
                 nProposalFee += vout.nValue;
+                nCreated -= vout.nValue;
                 LogPrint("daoextra", "%s: Updated DAO Fund supply to %d\n", __func__, pindex->nCFSupply);
             }
         }
@@ -3850,7 +4367,7 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
 
             GetVersionMask(nVersionMaskProposal, nVersionMaskPaymentRequest, nVersionMaskConsultation, nVersionMaskConsultationAnswer, pindex->pprev);
 
-            if(fCFund && tx.nVersion == CTransaction::PROPOSAL_VERSION && IsValidProposal(tx, view, nVersionMaskProposal)){
+            if(fCFund && (tx.nVersion&0xF) == CTransaction::PROPOSAL_VERSION && IsValidProposal(tx, view, nVersionMaskProposal)){
                 CProposal proposal;
                 if (TxToProposal(tx.strDZeel, tx.GetHash(), block.GetHash(), nProposalFee, proposal))
                 {
@@ -3862,8 +4379,8 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
                     return false;
                 }
             }
-            else if(fCFund && tx.nVersion == CTransaction::PAYMENT_REQUEST_VERSION && IsValidPaymentRequest(tx, view, nVersionMaskPaymentRequest))
-            {
+
+            if((tx.nVersion&0xF) == CTransaction::PAYMENT_REQUEST_VERSION && IsValidPaymentRequest(tx, view, nVersionMaskPaymentRequest)){
                 CPaymentRequest prequest;
                 if (TxToPaymentRequest(tx.strDZeel, tx.GetHash(), block.GetHash(), prequest))
                 {
@@ -3879,11 +4396,11 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
                     return false;
                 }
             }
-            else if(fDAOConsultations && tx.nVersion == CTransaction::CONSULTATION_VERSION && IsValidConsultation(tx, view, nVersionMaskConsultation, pindex->pprev))
+            else if(fDAOConsultations && (tx.nVersion&0xF) == CTransaction::CONSULTATION_VERSION && IsValidConsultation(tx, view, nVersionMaskConsultation, pindex->pprev))
             {
                 CConsultation consultation;
                 std::vector<CConsultationAnswer> vAnswers;
-                if (TxToConsultation(tx.strDZeel, tx.GetHash(), block.GetHash(), consultation, vAnswers))
+                if (TxToConsultation(tx.strDZeel, tx.GetHash(), block.GetHash(), pindex->pprev, consultation, vAnswers))
                 {
                     if (view.AddConsultation(consultation))
                     {
@@ -3903,7 +4420,7 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
                     return false;
                 }
             }
-            if(fDAOConsultations && (tx.nVersion == CTransaction::ANSWER_VERSION))
+            if(fDAOConsultations && ((tx.nVersion&0xF) == CTransaction::ANSWER_VERSION))
             {
                 if (IsValidConsultationAnswer(tx, view, nVersionMaskConsultationAnswer, pindex->pprev))
                 {
@@ -3928,6 +4445,14 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
             }
         }
 
+        if (!tx.IsBLSInput())
+        {
+            nCreated += tx.GetValueOut() - view.GetValueIn(tx);
+        }
+        else
+        {
+            nMovedToPublic += tx.GetValueOut() - view.GetValueIn(tx) - nBLSCTPrivateFees;
+        }
 
         CTxUndo undoDummy;
         if (i > 0) {
@@ -4102,7 +4627,40 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
 
         if (nStakeReward > nCalculatedStakeReward)
             return state.DoS(100, error("ConnectBlock() : coinstake pays too much(actual=%d vs calculated=%d)", nStakeReward, nCalculatedStakeReward));
+
+        if (block.vtx[1].IsCTOutput()) // coinstake moving to private is checked after the loop
+        {
+            //LogPrintf("%s: Verifying rewards moving to private. Amount must be: %s\n", __func__, FormatMoney(nCalculatedStakeReward - nStakeReward));
+
+            try
+            {
+                blsctKey v;
+
+                if (pwalletMain)
+                    pwalletMain->GetBLSCTViewKey(v);
+                else
+                    v = blsctKey(bls::PrivateKey::FromBN(Scalar::Rand().bn));
+
+                CTransaction tx = block.vtx[1];
+
+                nMovedToBLS += nCalculatedStakeReward - nStakeReward;
+
+                if (!VerifyBLSCTBalanceOutputs(block.vtx[1], v.GetKey(), blsctData[1], view, state, false, nCalculatedStakeReward - nStakeReward))
+                    return error("%s: Stake %s failed verification of private output: %s\n", __func__, block.vtx[1].GetHash().ToString(), FormatStateMessage(state));
+            }
+            catch(...)
+            {
+                return error("%s: Failed verifying redirection of stakes to private\n", __func__);
+            }
+        }
     }
+
+    pindex->nPublicMoneySupply += nCreated + nMovedToPublic - nBLSCTPublicFees;
+    pindex->nPrivateMoneySupply += nMovedToBLS - nBLSCTPrivateFees - nMovedToPublic;
+    pindex->nStatus |= BLOCK_OPT_SUPPLY;
+
+    if (pindex->nPrivateMoneySupply < 0)
+        return state.DoS(100, error("ConnectBlock() : private money supply goes in negative"));
 
     if (!control.Wait()) {
         return state.DoS(100, false);
@@ -4140,7 +4698,13 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
         if (!pblocktree->WriteAddressIndex(addressIndex)) {
             return AbortNode(state, "Failed to write address index");
         }
-
+        for (auto &it: addressHistoryMap)
+        {
+            addressHistory.push_back(std::make_pair(it.first, it.second));
+        }
+        if (!pblocktree->WriteAddressHistory(addressHistory)) {
+            return AbortNode(state, "Failed to write address history");
+        }
         if (!pblocktree->UpdateAddressUnspentIndex(addressUnspentIndex)) {
             return AbortNode(state, "Failed to write address unspent index");
         }
@@ -4191,6 +4755,14 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
         LogPrint("mempool", "Erased %d orphan tx included or conflicted by block\n", nErased);
     }
 
+    if (vBLSConflicted.size()) {
+        for (auto& it: vBLSConflicted)
+        {
+            RemoveBLSCTConflicting(stempool, it, &mempool.cs, &stempool.cs);
+            RemoveBLSCTConflicting(mempool, it, &mempool.cs, &stempool.cs);
+        }
+    }
+
     int64_t nTime6 = GetTimeMicros(); nTimeCallbacks += nTime6 - nTime5;
     LogPrint("bench", "    - Callbacks: %.2fms [%.2fs]\n", 0.001 * (nTime6 - nTime5), nTimeCallbacks * 0.000001);
 
@@ -4206,7 +4778,7 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
  */
 bool static FlushStateToDisk(CValidationState &state, FlushStateMode mode) {
     const CChainParams& chainparams = Params();
-    int64_t nMempoolUsage = mempool.DynamicMemoryUsage();
+    int64_t nMempoolUsage = mempool.DynamicMemoryUsage(&mempool.cs, &stempool.cs);
     LOCK2(cs_main, cs_LastBlockFile);
     static int64_t nLastWrite = 0;
     static int64_t nLastFlush = 0;
@@ -4329,9 +4901,9 @@ void static UpdateTip(CBlockIndex *pindexNew, uint256 statehash, const CChainPar
 
     // New best block
     nTimeBestReceived = GetTime();
-    mempool.AddTransactionsUpdated(1);
+    mempool.AddTransactionsUpdated(1, &mempool.cs, &stempool.cs);
     // Changes to mempool should also be made to Dandelion stempool
-    stempool.AddTransactionsUpdated(1);
+    stempool.AddTransactionsUpdated(1, &mempool.cs, &stempool.cs);
 
     cvBlockChange.notify_all();
 
@@ -4433,12 +5005,12 @@ bool static DisconnectTip(CValidationState& state, const CChainParams& chainpara
             // ignore validation errors in resurrected transactions
             list<CTransaction> removed;
             CValidationState stateDummy;
-            bool ret = AcceptToMemoryPool(mempool, stateDummy, tx, false, nullptr, true);
+            bool ret = AcceptToMemoryPool(mempool, &mempool.cs, &stempool.cs, stateDummy, tx, false, nullptr, true);
             CValidationState dandelionStateDummy;
-            AcceptToMemoryPool(stempool, dandelionStateDummy, tx, false, nullptr, true, 0);
+            AcceptToMemoryPool(stempool, &mempool.cs, &stempool.cs, dandelionStateDummy, tx, false, nullptr, true, 0);
             if (!(tx.IsCoinBase() || tx.IsCoinStake()) || !ret) {
-                mempool.removeRecursive(tx, removed);
-                stempool.removeRecursive(tx, removed);
+                mempool.removeRecursive(tx, removed, &mempool.cs, &stempool.cs);
+                stempool.removeRecursive(tx, removed, &mempool.cs, &stempool.cs);
             } else if (mempool.exists(tx.GetHash())) {
                 vHashUpdate.push_back(tx.GetHash());
             }
@@ -4448,9 +5020,9 @@ bool static DisconnectTip(CValidationState& state, const CChainParams& chainpara
         // previously-confirmed transactions back to the mempool.
         // UpdateTransactionsFromBlock finds descendants of any transactions in this
         // block that were added back and cleans up the mempool state.
-        mempool.UpdateTransactionsFromBlock(vHashUpdate);
+        mempool.UpdateTransactionsFromBlock(vHashUpdate, &mempool.cs, &stempool.cs);
         // Changes to mempool should also be made to Dandelion stempool
-        stempool.UpdateTransactionsFromBlock(vHashUpdate);
+        stempool.UpdateTransactionsFromBlock(vHashUpdate, &mempool.cs, &stempool.cs);
     }
 
     // Update chainActive and related variables.
@@ -4491,10 +5063,11 @@ bool static ConnectTip(CValidationState& state, const CChainParams& chainparams,
     int64_t nTime4;
     LogPrint("bench", "  - Load block from disk: %.2fms [%.2fs]\n", (nTime2 - nTime1) * 0.001, nTimeReadFromDisk * 0.000001);
     uint256 statehash;
+    std::map<int, std::vector<RangeproofEncodedData>> blsctData;
     {
         CStateViewCache view(pcoinsTip);
 
-        bool rv = ConnectBlock(*pblock, state, pindexNew, view, chainparams);
+        bool rv = ConnectBlock(*pblock, state, pindexNew, view, chainparams, blsctData);
 
         GetMainSignals().BlockChecked(*pblock, state);
         if (!rv) {
@@ -4521,8 +5094,14 @@ bool static ConnectTip(CValidationState& state, const CChainParams& chainparams,
     LogPrint("bench", "  - Writing chainstate: %.2fms [%.2fs]\n", (nTime6 - nTime5) * 0.001, nTimeChainState * 0.000001);
     // Remove conflicting transactions from the mempool.
     list<CTransaction> txConflicted;
-    mempool.removeForBlock(pblock->vtx, pindexNew->nHeight, txConflicted, !IsInitialBlockDownload());
-    stempool.removeForBlock(pblock->vtx, pindexNew->nHeight, txConflicted, !IsInitialBlockDownload());
+    mempool.removeForBlock(pblock->vtx, &mempool.cs, &stempool.cs, pindexNew->nHeight, txConflicted, !IsInitialBlockDownload());
+    stempool.removeForBlock(pblock->vtx, &mempool.cs, &stempool.cs, pindexNew->nHeight, txConflicted, !IsInitialBlockDownload());
+    if (pwalletMain && pblock->vtx.size() > 2 && pblock->vtx[2].IsBLSInput())
+    {
+        LOCK(pwalletMain->cs_wallet);
+        if (pwalletMain->aggSession)
+            pwalletMain->aggSession->UpdateCandidateTransactions(pblock->vtx[2]);
+    }
     // Update chainActive & related variables.
     UpdateTip(pindexNew, statehash, chainparams);
     // Tell wallet about transactions that went from mempool
@@ -4531,8 +5110,9 @@ bool static ConnectTip(CValidationState& state, const CChainParams& chainparams,
         SyncWithWallets(tx, pindexNew, nullptr);
     }
     // ... and about transactions that got confirmed:
-    for(const CTransaction &tx: pblock->vtx) {
-        SyncWithWallets(tx, pindexNew, pblock);
+    for(size_t i = 0; i<pblock->vtx.size(); i++) {
+        CTransaction tx = pblock->vtx[i];
+        SyncWithWallets(tx, pindexNew, pblock, true, &(blsctData[i]));
     }
 
     int64_t nTime7 = GetTimeMicros(); nTimePostConnect += nTime7 - nTime6; nTimeTotal += nTime7 - nTime1;
@@ -4673,15 +5253,15 @@ static bool ActivateBestChainStep(CValidationState& state, const CChainParams& c
     }
 
     if (fBlocksDisconnected) {
-        mempool.removeForReorg(pcoinsTip, chainActive.Tip()->nHeight + 1, STANDARD_LOCKTIME_VERIFY_FLAGS);
+        mempool.removeForReorg(pcoinsTip, &mempool.cs, &stempool.cs, chainActive.Tip()->nHeight + 1, STANDARD_LOCKTIME_VERIFY_FLAGS);
         // Changes to mempool should also be made to Dandelion stempool
-        stempool.removeForReorg(pcoinsTip, chainActive.Tip()->nHeight + 1, STANDARD_LOCKTIME_VERIFY_FLAGS);
-        LimitMempoolSize(mempool, GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000, GetArg("-mempoolexpiry", DEFAULT_MEMPOOL_EXPIRY) * 60 * 60);
+        stempool.removeForReorg(pcoinsTip, &mempool.cs, &stempool.cs, chainActive.Tip()->nHeight + 1, STANDARD_LOCKTIME_VERIFY_FLAGS);
+        LimitMempoolSize(mempool, GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000, GetArg("-mempoolexpiry", DEFAULT_MEMPOOL_EXPIRY) * 60 * 60, &mempool.cs, &stempool.cs);
         // Changes to mempool should also be made to Dandelion stempool
-        LimitMempoolSize(stempool, GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000, GetArg("-mempoolexpiry", DEFAULT_MEMPOOL_EXPIRY) * 60 * 60);
+        LimitMempoolSize(stempool, GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000, GetArg("-mempoolexpiry", DEFAULT_MEMPOOL_EXPIRY) * 60 * 60, &mempool.cs, &stempool.cs);
     }
-    mempool.check(pcoinsTip);
-    stempool.check(pcoinsTip);
+    mempool.check(pcoinsTip, &mempool.cs, &stempool.cs);
+    stempool.check(pcoinsTip, &mempool.cs, &stempool.cs);
 
     // Callbacks/notifications for a new best chain.
     if (fInvalidFound)
@@ -4819,13 +5399,14 @@ bool InvalidateBlock(CValidationState& state, const CChainParams& chainparams, C
         // ActivateBestChain considers blocks already in chainActive
         // unconditionally valid already, so force disconnect away from it.
         if (!DisconnectTip(state, chainparams)) {
-            mempool.removeForReorg(pcoinsTip, chainActive.Tip()->nHeight + 1, STANDARD_LOCKTIME_VERIFY_FLAGS);
+            mempool.removeForReorg(pcoinsTip, &mempool.cs, &stempool.cs, chainActive.Tip()->nHeight + 1, STANDARD_LOCKTIME_VERIFY_FLAGS);
+            stempool.removeForReorg(pcoinsTip, &mempool.cs, &stempool.cs, chainActive.Tip()->nHeight + 1, STANDARD_LOCKTIME_VERIFY_FLAGS);
             return false;
         }
     }
 
-    LimitMempoolSize(mempool, GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000, GetArg("-mempoolexpiry", DEFAULT_MEMPOOL_EXPIRY) * 60 * 60);
-    LimitMempoolSize(stempool, GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000, GetArg("-mempoolexpiry", DEFAULT_MEMPOOL_EXPIRY) * 60 * 60);
+    LimitMempoolSize(mempool, GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000, GetArg("-mempoolexpiry", DEFAULT_MEMPOOL_EXPIRY) * 60 * 60, &mempool.cs, &stempool.cs);
+    LimitMempoolSize(stempool, GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000, GetArg("-mempoolexpiry", DEFAULT_MEMPOOL_EXPIRY) * 60 * 60, &mempool.cs, &stempool.cs);
 
     // The resulting new best tip may not be in setBlockIndexCandidates anymore, so
     // add it again.
@@ -4838,8 +5419,8 @@ bool InvalidateBlock(CValidationState& state, const CChainParams& chainparams, C
     }
 
     InvalidChainFound(pindex);
-    mempool.removeForReorg(pcoinsTip, chainActive.Tip()->nHeight + 1, STANDARD_LOCKTIME_VERIFY_FLAGS);
-    stempool.removeForReorg(pcoinsTip, chainActive.Tip()->nHeight + 1, STANDARD_LOCKTIME_VERIFY_FLAGS);
+    mempool.removeForReorg(pcoinsTip, &mempool.cs, &stempool.cs, chainActive.Tip()->nHeight + 1, STANDARD_LOCKTIME_VERIFY_FLAGS);
+    stempool.removeForReorg(pcoinsTip, &mempool.cs, &stempool.cs, chainActive.Tip()->nHeight + 1, STANDARD_LOCKTIME_VERIFY_FLAGS);
     return true;
 }
 
@@ -5124,12 +5705,20 @@ bool CheckBlock(const CBlock& block, CValidationState& state, const Consensus::P
         return error("CheckBlock() : bad proof-of-stake block signature");
     }
 
+    int nBLSInputTxCount = 0;
+
     // Check transactions
     for(const CTransaction& tx: block.vtx)
     {
         if (!CheckTransaction(tx, state))
             return state.Invalid(false, state.GetRejectCode(), state.GetRejectReason(),
                                  strprintf("Transaction check failed (tx hash %s) %s\n%s", tx.GetHash().ToString(), state.GetDebugMessage(), tx.ToString()));
+
+        if (tx.IsBLSInput())
+            nBLSInputTxCount++;
+
+        if (nBLSInputTxCount > 1)
+            return state.DoS(100, false, REJECT_INVALID, "bad-multiple-blsinput-txs", false, "only one transaction with bls inputs is allowed");
     }
 
     unsigned int nSigOps = 0;
@@ -5262,10 +5851,22 @@ bool IsColdStakingEnabled(const CBlockIndex* pindexPrev, const Consensus::Params
     return (VersionBitsState(pindexPrev, params, Consensus::DEPLOYMENT_COLDSTAKING, versionbitscache) == THRESHOLD_ACTIVE);
 }
 
+bool IsBLSCTEnabled(const CBlockIndex* pindexPrev, const Consensus::Params& params)
+{
+    LOCK(cs_main);
+    return (VersionBitsState(pindexPrev, params, Consensus::DEPLOYMENT_BLSCT, versionbitscache) == THRESHOLD_ACTIVE);
+}
+
 bool IsColdStakingv2Enabled(const CBlockIndex* pindexPrev, const Consensus::Params& params)
 {
     LOCK(cs_main);
     return (VersionBitsState(pindexPrev, params, Consensus::DEPLOYMENT_COLDSTAKING_V2, versionbitscache) == THRESHOLD_ACTIVE);
+}
+
+bool IsExcludeEnabled(const CBlockIndex* pindexPrev, const Consensus::Params& params)
+{
+    LOCK(cs_main);
+    return (VersionBitsState(pindexPrev, params, Consensus::DEPLOYMENT_EXCLUDE, versionbitscache) == THRESHOLD_ACTIVE);
 }
 
 bool IsVoteCacheStateEnabled(const CBlockIndex* pindexPrev, const Consensus::Params& params)
@@ -5387,14 +5988,22 @@ bool ContextualCheckBlockHeader(const CBlockHeader& block, CValidationState& sta
     if((block.nVersion & nCFundVersionMask) != nCFundVersionMask && IsCommunityFundEnabled(pindexPrev,Params().GetConsensus()))
         return state.Invalid(false, REJECT_OBSOLETE, strprintf("bad-version(0x%08x)", block.nVersion),
                            "rejected no cfund block");
+#if CLIENT_BUILD_IS_TEST_RELEASE
+    bool fTestNet = GetBoolArg("-testnet", true);
+#else
+    bool fTestNet = GetBoolArg("-testnet", false);
+#endif
 
-    if(!GetBoolArg("-testnet",false)) {
+    if(!fTestNet) {
         if((block.nVersion & nCFundAccVersionMask) != nCFundAccVersionMask && IsCommunityFundAccumulationEnabled(pindexPrev,Params().GetConsensus(), true))
             return state.Invalid(false, REJECT_OBSOLETE, strprintf("bad-version(0x%08x)", block.nVersion),
                                "rejected no cfund accumulation block");
         if((block.nVersion & nColdStakingVersionMask) != nColdStakingVersionMask && IsColdStakingEnabled(pindexPrev,Params().GetConsensus()))
             return state.Invalid(false, REJECT_OBSOLETE, strprintf("bad-version(0x%08x)", block.nVersion),
                                "rejected no cold-staking block");
+        if((block.nVersion & nBLSCTVersionMask) != nBLSCTVersionMask && IsBLSCTEnabled(pindexPrev,Params().GetConsensus()))
+            return state.Invalid(false, REJECT_OBSOLETE, strprintf("bad-version(0x%08x)", block.nVersion),
+                             "rejected no blsct block");
     }
 
     if((block.nVersion & nCFundAccSpreadVersionMask) != nCFundAccSpreadVersionMask && IsCommunityFundAccumulationSpreadEnabled(pindexPrev,Params().GetConsensus()))
@@ -5426,6 +6035,16 @@ bool ContextualCheckBlockHeader(const CBlockHeader& block, CValidationState& sta
                          "rejected, block version isn't v4.5.2");
 
     if((block.nVersion & nDAOVersionMask) != nDAOVersionMask && IsDAOEnabled(pindexPrev,Params().GetConsensus()))
+        return state.Invalid(false, REJECT_OBSOLETE, strprintf("bad-version(0x%08x)", block.nVersion),
+                         "rejected no consultations block");
+
+#if CLIENT_BUILD_IS_TEST_RELEASE
+    bool fTestnet = GetBoolArg("-testnet", true);
+#else
+    bool fTestnet = GetBoolArg("-testnet", false);
+#endif
+
+    if((block.nVersion & (fTestnet?0x08000000:nDaoExcludeVersionMask)) != (fTestnet?0x08000000:nDaoExcludeVersionMask) && IsExcludeEnabled(pindexPrev,Params().GetConsensus()))
         return state.Invalid(false, REJECT_OBSOLETE, strprintf("bad-version(0x%08x)", block.nVersion),
                          "rejected no consultations block");
 
@@ -5692,7 +6311,7 @@ bool ProcessNewBlock(CValidationState& state, const CChainParams& chainparams, C
         CheckBlockIndex(chainparams.GetConsensus());
 
         if (!ret)
-            return error("%s: AcceptBlock FAILED", __func__);
+            return error("%s: AcceptBlock FAILED: %s", __func__, pblock->ToString());
     }
 
     NotifyHeaderTip();
@@ -5715,6 +6334,7 @@ bool TestBlockValidity(CValidationState& state, const CChainParams& chainparams,
     CBlockIndex indexDummy(block);
     indexDummy.pprev = pindexPrev;
     indexDummy.nHeight = pindexPrev->nHeight + 1;
+    std::map<int, std::vector<RangeproofEncodedData>> blsctData;
 
     // NOTE: CheckBlockHeader is called by CheckBlock
     if (!ContextualCheckBlockHeader(block, state, chainparams.GetConsensus(), pindexPrev, GetAdjustedTime()))
@@ -5723,7 +6343,7 @@ bool TestBlockValidity(CValidationState& state, const CChainParams& chainparams,
         return error("%s: Consensus::CheckBlock: %s", __func__, FormatStateMessage(state));
     if (!ContextualCheckBlock(block, state, pindexPrev, !fCheckPOW))
         return error("%s: Consensus::ContextualCheckBlock: %s", __func__, FormatStateMessage(state));
-    if (!ConnectBlock(block, state, &indexDummy, viewNew, chainparams, true, !fCheckPOW))
+    if (!ConnectBlock(block, state, &indexDummy, viewNew, chainparams, blsctData, true, !fCheckPOW))
         return false;
     assert(state.IsValid());
 
@@ -6189,9 +6809,10 @@ bool CVerifyDB::VerifyDB(const CChainParams& chainparams, CStateView *coinsview,
             uiInterface.ShowProgress(_("Verifying blocks..."), std::max(1, std::min(99, 100 - (int)(((double)(chainActive.Height() - pindex->nHeight)) / (double)nCheckDepth * 50))));
             pindex = chainActive.Next(pindex);
             CBlock block;
+            std::map<int, std::vector<RangeproofEncodedData>> blsctData;
             if (!ReadBlockFromDisk(block, pindex, chainparams.GetConsensus()))
                 return error("VerifyDB(): *** ReadBlockFromDisk failed at %d, hash=%s", pindex->nHeight, pindex->GetBlockHash().ToString());
-            if (!ConnectBlock(block, state, pindex, coins, chainparams))
+            if (!ConnectBlock(block, state, pindex, coins, chainparams, blsctData))
                 return error("VerifyDB(): *** found unconnectable block at %d, hash=%s", pindex->nHeight, pindex->GetBlockHash().ToString());
             if (!VoteStep(state, pindex, false, coins))
                 return error("VerifyDB(): *** VoteStep failed at %d, hash=%s", pindex->nHeight, pindex->GetBlockHash().ToString());
@@ -6389,8 +7010,8 @@ void UnloadBlockIndex()
     chainActive.SetTip(NULL);
     pindexBestInvalid = nullptr;
     pindexBestHeader = nullptr;
-    mempool.clear();
-    stempool.clear();
+    mempool.clear(&mempool.cs, &stempool.cs);
+    stempool.clear(&mempool.cs, &stempool.cs);
     mapOrphanTransactions.clear();
     mapOrphanTransactionsByPrev.clear();
     nSyncStarted = 0;
@@ -7033,7 +7654,7 @@ void static ProcessGetData(CNode* pfrom, const Consensus::Params& consensusParam
                 bool push = false;
                 if (inv.type == MSG_DANDELION_TX || inv.type == MSG_DANDELION_WITNESS_TX) {
                       int nSendFlags = (inv.type == MSG_DANDELION_TX ? SERIALIZE_TRANSACTION_NO_WITNESS : 0);
-                      auto txinfo = stempool.info(inv.hash);
+                      auto txinfo = stempool.info(inv.hash, &mempool.cs, &stempool.cs);
                       uint256 dandelionServiceDiscoveryHash;
                       dandelionServiceDiscoveryHash.SetHex("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
                       if (txinfo.tx && !IsDandelionInbound(pfrom) && pfrom->setDandelionInventoryKnown.count(inv.hash)!=0) {
@@ -7048,7 +7669,7 @@ void static ProcessGetData(CNode* pfrom, const Consensus::Params& consensusParam
                       auto mi = mapRelay.find(inv.hash);
                       int nSendFlags = (inv.type == MSG_TX ? SERIALIZE_TRANSACTION_NO_WITNESS : 0);
                       if (!pfrom->fSupportsDandelion && !IsDandelionInbound(pfrom) && pfrom->setDandelionInventoryKnown.count(inv.hash)!=0) {
-                          auto txinfo = stempool.info(inv.hash);
+                          auto txinfo = stempool.info(inv.hash, &mempool.cs, &stempool.cs);
                           if (txinfo.tx) {
                               pfrom->PushMessageWithFlag(nSendFlags, NetMsgType::TX, *txinfo.tx);
                               push = true;
@@ -7057,7 +7678,7 @@ void static ProcessGetData(CNode* pfrom, const Consensus::Params& consensusParam
                           pfrom->PushMessageWithFlag(nSendFlags, NetMsgType::TX, *mi->second);
                           push = true;
                       } else if (pfrom->timeLastMempoolReq) {
-                          auto txinfo = mempool.info(inv.hash);
+                          auto txinfo = mempool.info(inv.hash, &mempool.cs, &stempool.cs);
                           // To protect privacy, do not answer getdata using the mempool when
                           // that TX couldn't have been INVed in reply to a MEMPOOL request.
                           if (txinfo.tx && txinfo.nTime <= pfrom->timeLastMempoolReq) {
@@ -7110,7 +7731,6 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv, 
         LogPrintf("dropmessagestest DROPPING RECV MESSAGE\n");
         return true;
     }
-
 
     if (!(nLocalServices & NODE_BLOOM) &&
               (strCommand == NetMsgType::FILTERLOAD ||
@@ -7737,16 +8357,16 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv, 
         pfrom->setAskFor.erase(inv.hash);
         mapAlreadyAskedFor.erase(inv);
 
-        if (!AlreadyHave(inv) && AcceptToMemoryPool(mempool, state, tx, true, &fMissingInputs)) {
+        if (!AlreadyHave(inv) && AcceptToMemoryPool(mempool, &mempool.cs, &stempool.cs, state, tx, true, &fMissingInputs)) {
             // Changes to mempool should also be made to Dandelion stempool
-            AcceptToMemoryPool(stempool, dummyState, tx, true, nullptr);
+            AcceptToMemoryPool(stempool, &mempool.cs, &stempool.cs, dummyState, tx, true, nullptr);
             if (IsTxDandelionEmbargoed(tx.GetHash())) {
                 LogPrint("dandelion", "Embargoed dandeliontx %s found in mempool; removing from embargo map\n", tx.GetHash().ToString());
                 RemoveDandelionEmbargo(tx.GetHash());
             }
-            mempool.check(pcoinsTip);
+            mempool.check(pcoinsTip, &mempool.cs, &stempool.cs);
             // Changes to mempool should also be made to Dandelion stempool
-            stempool.check(pcoinsTip);
+            stempool.check(pcoinsTip, &mempool.cs, &stempool.cs);
             RelayTransaction(tx);
             for (unsigned int i = 0; i < tx.vout.size(); i++) {
                 vWorkQueue.emplace_back(inv.hash, i);
@@ -7757,7 +8377,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv, 
             LogPrint("mempool", "AcceptToMemoryPool: peer=%d: accepted %s (poolsz %u txn, %u kB)\n",
                 pfrom->id,
                 tx.GetHash().ToString(),
-                mempool.size(), mempool.DynamicMemoryUsage() / 1000);
+                mempool.size(), mempool.DynamicMemoryUsage(&mempool.cs, &stempool.cs) / 1000);
 
             // Recursively process any orphan transactions that depended on this one
             set<NodeId> setMisbehaving;
@@ -7782,9 +8402,9 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv, 
 
                     if (setMisbehaving.count(fromPeer))
                         continue;
-                    if (AcceptToMemoryPool(mempool, stateDummy, orphanTx, true, &fMissingInputs2)) {
+                    if (AcceptToMemoryPool(mempool, &mempool.cs, &stempool.cs, stateDummy, orphanTx, true, &fMissingInputs2)) {
                         // Changes to mempool should also be made to Dandelion stempool
-                        AcceptToMemoryPool(stempool, stateDummyDandelion, orphanTx, true, nullptr);
+                        AcceptToMemoryPool(stempool, &mempool.cs, &stempool.cs, stateDummyDandelion, orphanTx, true, nullptr);
                         LogPrint("mempool", "   accepted orphan tx %s\n", orphanHash.ToString());
                         RelayTransaction(orphanTx);
                         for (unsigned int i = 0; i < orphanTx.vout.size(); i++) {
@@ -7811,9 +8431,9 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv, 
                             recentRejects->insert(orphanHash);
                         }
                     }
-                    mempool.check(pcoinsTip);
+                    mempool.check(pcoinsTip, &mempool.cs, &stempool.cs);
                     // Changes to mempool should also be made to Dandelion stempool
-                    stempool.check(pcoinsTip);
+                    stempool.check(pcoinsTip, &mempool.cs, &stempool.cs);
                 }
             }
 
@@ -7886,6 +8506,91 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv, 
         }
         FlushStateToDisk(state, FLUSH_STATE_PERIODIC);
     }
+    else if (strCommand == NetMsgType::DANDELIONAGGREGATIONSESSION)
+    {
+        if (IsDandelionInbound(pfrom)) {
+            try
+            {
+                AggregationSession ms(pcoinsTip);
+                vRecv >> ms;
+                int64_t nCurrTime = GetTimeMicros();
+                int64_t nEmbargo = 1000000*DANDELION_EMBARGO_MINIMUM+PoissonNextSend(nCurrTime, DANDELION_EMBARGO_AVG_ADD);
+                InsertDandelionAggregationSessionEmbargo(&ms, nEmbargo);
+                RelayDandelionAggregationSession(ms, pfrom);
+            }
+            catch(...)
+            {
+
+            }
+        }
+    }
+    else if (strCommand == NetMsgType::AGGREGATIONSESSION)
+    {
+        try
+        {
+            AggregationSession ms(pcoinsTip);
+            vRecv >> ms;
+
+            if (IsDandelionAggregationSessionEmbargoed(ms.GetHash())) {
+                LogPrint("dandelion", "Embargoed dandelion message %s found; removing from embargo map\n", ms.GetHash().ToString());
+                RemoveDandelionAggregationSessionEmbargo(ms.GetHash());
+            }
+            if (!AggregationSession::IsKnown(ms))
+            {
+                uiInterface.NewAggregationSession(ms.GetHiddenService());
+                RelayAggregationSession(ms);
+                ms.Join();
+            }
+        }
+        catch(...)
+        {
+
+        }
+    }
+    else if (strCommand == NetMsgType::DANDELIONENCRYPTEDCANDIDATE)
+    {
+        if (IsDandelionInbound(pfrom)) {
+            try
+            {
+                EncryptedCandidateTransaction ec;
+                vRecv >> ec;
+                int64_t nCurrTime = GetTimeMicros();
+                int64_t nEmbargo = 1000000*DANDELION_EMBARGO_MINIMUM+PoissonNextSend(nCurrTime, DANDELION_EMBARGO_AVG_ADD);
+                InsertDandelionEncryptedCandidateEmbargo(ec, nEmbargo);
+                RelayDandelionEncryptedCandidate(ec, pfrom);
+            }
+            catch(...)
+            {
+
+            }
+        }
+    }
+    else if (strCommand == NetMsgType::ENCRYPTEDCANDIDATE)
+    {
+        try
+        {
+            EncryptedCandidateTransaction ec;
+            vRecv >> ec;
+
+            if (IsDandelionEncryptedCandidateEmbargoed(ec)) {
+                LogPrint("dandelion", "Embargoed dandelion message %s found; removing from embargo map\n", SerializeHash(ec).ToString());
+                RemoveDandelionEncryptedCandidateEmbargo(ec);
+            }
+            if (!AggregationSession::IsKnown(ec))
+            {
+                RelayEncryptedCandidate(ec);
+                if (pwalletMain && pwalletMain->aggSession)
+                {
+                    std::shared_ptr<EncryptedCandidateTransaction> pec = std::make_shared<EncryptedCandidateTransaction>(ec);
+                    pwalletMain->aggSession->NewEncryptedCandidateTransaction(pec);
+                }
+            }
+        }
+        catch(...)
+        {
+
+        }
+    }
     else if (strCommand == NetMsgType::DANDELIONTX)
     {
         CValidationState state;
@@ -7896,10 +8601,10 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv, 
         LOCK(cs_main);
         if (IsDandelionInbound(pfrom)) {
             if (!stempool.exists(inv.hash)) {
-                bool ret = AcceptToMemoryPool(stempool, state, tx, false, &fMissingInputs, false, 0);
+                bool ret = AcceptToMemoryPool(stempool, &mempool.cs, &stempool.cs, state, tx, false, &fMissingInputs, false, 0);
                 if (ret) {
                     LogPrint("mempool", "AcceptToStemPool: peer=%d: accepted %s (poolsz %u txn, %u kB)\n",
-                             pfrom->GetId(), tx.GetHash().ToString(), stempool.size(), stempool.DynamicMemoryUsage() / 1000);
+                             pfrom->GetId(), tx.GetHash().ToString(), stempool.size(), stempool.DynamicMemoryUsage(&mempool.cs, &stempool.cs) / 1000);
                     int64_t nCurrTime = GetTimeMicros();
                     int64_t nEmbargo = 1000000*DANDELION_EMBARGO_MINIMUM+PoissonNextSend(nCurrTime, DANDELION_EMBARGO_AVG_ADD);
                     InsertDandelionEmbargo(tx.GetHash(),nEmbargo);
@@ -8702,7 +9407,7 @@ public:
     {
         /* As std::make_heap produces a max-heap, we want the entries with the
          * fewest ancestors/highest fee to sort later. */
-        return mp->CompareDepthAndScore(*b, *a);
+        return mp->CompareDepthAndScore(*b, *a, &mempool.cs, &stempool.cs);
     }
 };
 
@@ -8726,7 +9431,7 @@ bool SendMessages(CNode* pto)
             // Ping automatically sent as a latency probe & keepalive.
             pingSend = true;
         }
-        if (pingSend) {
+        if (pingSend && !pto->fDisconnect) {
             uint64_t nonce = 0;
             while (nonce == 0) {
                 GetRandBytes((unsigned char*)&nonce, sizeof(nonce));
@@ -8812,7 +9517,7 @@ bool SendMessages(CNode* pto)
         bool fFetch = state.fPreferredDownload || (nPreferredDownload == 0 && !pto->fClient && !pto->fOneShot); // Download if this is a nice peer, or we have no nice peers and this one might do.
         if (!state.fSyncStarted && !pto->fClient && !fImporting && !fReindex) {
             // Only actively request headers from a single peer, unless we're close to today.
-            if ((nSyncStarted == 0 && fFetch) || pindexBestHeader->GetBlockTime() > GetAdjustedTime() - 24 * 60 * 60) {
+            if ((nSyncStarted == 0 && !pto->fDisconnect && fFetch) || pindexBestHeader->GetBlockTime() > GetAdjustedTime() - 24 * 60 * 60) {
                 state.fSyncStarted = true;
                 nSyncStarted++;
                 const CBlockIndex *pindexStart = pindexBestHeader;
@@ -8994,6 +9699,7 @@ bool SendMessages(CNode* pto)
                     vInv.clear();
                 }
             }
+
             pto->vInventoryDandelionTxToSend.clear();
 
             // Check whether periodic sends should happen
@@ -9012,7 +9718,7 @@ bool SendMessages(CNode* pto)
 
             // Respond to BIP35 mempool requests
             if (fSendTrickle && pto->fSendMempool) {
-                auto vtxinfo = mempool.infoAll();
+                auto vtxinfo = mempool.infoAll(&mempool.cs, &stempool.cs);
                 pto->fSendMempool = false;
                 CAmount filterrate = 0;
                 {
@@ -9077,7 +9783,7 @@ bool SendMessages(CNode* pto)
                         continue;
                     }
                     // Not in the mempool anymore? don't bother sending it.
-                    auto txinfo = mempool.info(hash);
+                    auto txinfo = mempool.info(hash, &mempool.cs, &stempool.cs);
                     if (!txinfo.tx) {
                         continue;
                     }
@@ -9194,7 +9900,7 @@ bool SendMessages(CNode* pto)
         // We don't want white listed peers to filter txs to us if we have -whitelistforcerelay
         if (pto->nVersion >= FEEFILTER_VERSION && GetBoolArg("-feefilter", DEFAULT_FEEFILTER) &&
             !(pto->fWhitelisted && GetBoolArg("-whitelistforcerelay", DEFAULT_WHITELISTFORCERELAY))) {
-            CAmount currentFilter = mempool.GetMinFee(GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000).GetFeePerK();
+            CAmount currentFilter = mempool.GetMinFee(GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000, &mempool.cs, &stempool.cs).GetFeePerK();
             int64_t timeNow = GetTimeMicros();
             if (timeNow > pto->nextSendTimeFeeFilter) {
                 CAmount filterToSend = filterRounder.round(currentFilter);
@@ -9782,11 +10488,11 @@ static void RelayDandelionTransaction(const CTransaction& tx, CNode* pfrom)
     if (rng.randrange(100)<DANDELION_FLUFF) {
         LogPrint("dandelion", "Dandelion fluff: %s\n", tx.GetHash().ToString());
         CValidationState state;
-        std::shared_ptr<const CTransaction> ptx = stempool.get(tx.GetHash());
+        std::shared_ptr<const CTransaction> ptx = stempool.get(tx.GetHash(), &mempool.cs, &stempool.cs);
         bool fMissingInputs = false;
-        AcceptToMemoryPool(mempool, state, *ptx, false, &fMissingInputs, false, 0);
+        AcceptToMemoryPool(mempool, &mempool.cs, &stempool.cs, state, *ptx, false, &fMissingInputs, false, 0);
         LogPrint("mempool", "AcceptToMemoryPool: peer=%d: accepted %s (poolsz %u txn, %u kB)\n",
-                 pfrom->GetId(), tx.GetHash().ToString(), mempool.size(), mempool.DynamicMemoryUsage() / 1000);
+                 pfrom->GetId(), tx.GetHash().ToString(), mempool.size(), mempool.DynamicMemoryUsage(&mempool.cs, &stempool.cs) / 1000);
         RelayTransaction(tx);
     } else {
         CInv inv(MSG_DANDELION_TX, tx.GetHash());
@@ -9797,9 +10503,55 @@ static void RelayDandelionTransaction(const CTransaction& tx, CNode* pfrom)
     }
 }
 
+static void RelayDandelionAggregationSession(const AggregationSession& ms, CNode* pfrom)
+{
+    FastRandomContext rng;
+    if (rng.randrange(100)<DANDELION_FLUFF) {
+        LogPrint("dandelion", "Dandelion message fluff: %s\n", ms.GetHash().ToString());
+        RelayAggregationSession(ms);
+    } else {
+        CNode* destination = GetDandelionDestination(pfrom);
+        if (destination!=nullptr) {
+            destination->PushMessage(NetMsgType::AGGREGATIONSESSION, ms);
+        }
+    }
+}
+
+static void RelayDandelionEncryptedCandidate(const EncryptedCandidateTransaction& ec, CNode* pfrom)
+{
+    FastRandomContext rng;
+    if (rng.randrange(100)<DANDELION_FLUFF) {
+        LogPrint("dandelion", "Dandelion message fluff: %s\n", SerializeHash(ec).ToString());
+        RelayEncryptedCandidate(ec);
+    } else {
+        CNode* destination = GetDandelionDestination(pfrom);
+        if (destination!=nullptr) {
+            destination->PushMessage(NetMsgType::ENCRYPTEDCANDIDATE, ec);
+        }
+    }
+}
+
 static void CheckDandelionEmbargoes()
 {
     int64_t nCurrTime = GetTimeMicros();
+    for (auto iter=mDandelionAggregationSessionEmbargo.begin(); iter!=mDandelionAggregationSessionEmbargo.end();) {
+        if (iter->second.second < nCurrTime) {
+            RelayAggregationSession(*(iter->second.first));
+            iter = mDandelionAggregationSessionEmbargo.erase(iter);
+        } else {
+            iter++;
+        }
+    }
+
+    for (auto iter=mDandelionEncryptedCandidateEmbargo.begin(); iter!=mDandelionEncryptedCandidateEmbargo.end();) {
+        if (iter->second < nCurrTime) {
+            RelayEncryptedCandidate(iter->first);
+            iter = mDandelionEncryptedCandidateEmbargo.erase(iter);
+        } else {
+            iter++;
+        }
+    }
+
     for (auto iter=mDandelionEmbargo.begin(); iter!=mDandelionEmbargo.end();) {
         if (mempool.exists(iter->first)) {
             LogPrint("dandelion", "Embargoed dandeliontx %s found in mempool; removing from embargo map\n", iter->first.ToString());
@@ -9807,7 +10559,7 @@ static void CheckDandelionEmbargoes()
         } else if (iter->second < nCurrTime) {
             LogPrint("dandelion", "dandeliontx %s embargo expired\n", iter->first.ToString());
             CValidationState state;
-            shared_ptr<const CTransaction> ptx = stempool.get(iter->first);
+            shared_ptr<const CTransaction> ptx = stempool.get(iter->first, &mempool.cs, &stempool.cs);
             // If txn was not found in Stempool, then something went wrong,
             // Keep it embargoed for now.
             if (!ptx) {
@@ -9818,9 +10570,9 @@ static void CheckDandelionEmbargoes()
                 continue;
             }
             bool fMissingInputs = false;
-            AcceptToMemoryPool(mempool, state, *ptx, false, &fMissingInputs, false, 0);
+            AcceptToMemoryPool(mempool, &mempool.cs, &stempool.cs, state, *ptx, false, &fMissingInputs, false, 0);
             LogPrint("mempool", "AcceptToMemoryPool: accepted %s (poolsz %u txn, %u kB)\n",
-                     iter->first.ToString(), mempool.size(), mempool.DynamicMemoryUsage() / 1000);
+                     iter->first.ToString(), mempool.size(), mempool.DynamicMemoryUsage(&mempool.cs, &stempool.cs) / 1000);
             RelayTransaction(*ptx);
             iter = mDandelionEmbargo.erase(iter);
         } else {

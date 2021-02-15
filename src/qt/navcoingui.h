@@ -81,8 +81,11 @@ public:
     /** Set the active menuBtns */
     void setActiveMenu(int index);
 
+    /** Prompt user if they have not saved changes to options page */
+    bool checkSettingsSaved();
+
     /** Sets the balance for the wallet GUI header */
-    void setBalance(const CAmount &avail, const CAmount &pendi, const CAmount &immat);
+    void setBalance(const CAmount &avail, const CAmount &pendi, const CAmount &immat, const CAmount &priv, const CAmount& privpending, const CAmount& privlocked);
 
     /** Sets the staked amounts for the wallet GUI header */
     void setStaked(const CAmount &all, const CAmount &today, const CAmount &week);
@@ -133,13 +136,18 @@ private:
     QLabel* balanceAvail;
     QLabel* balancePendi;
     QLabel* balanceImmat;
+    QLabel* privAvail;
+    QLabel* privPendi;
+    QLabel* privLocked;
     QLabel* stakedAvail;
     QLabel* stakedPendi;
     QLabel* stakedImmat;
 
     QMenuBar *appMenuBar;
     QAction *overviewAction;
+    QAction *daoAction;
     QAction *historyAction;
+    QAction *settingsAction;
     QAction *quitAction;
     QAction *sendCoinsAction;
     QAction *sendCoinsMenuAction;
@@ -160,8 +168,10 @@ private:
     QAction *cfundPaymentRequestsAction;
     QAction *toggleHideAction;
     QAction *encryptWalletAction;
+    QAction *encryptTxAction;
     QAction *backupWalletAction;
     QAction *changePassphraseAction;
+    QAction *changePinAction;
     QAction *aboutQtAction;
     QAction *openRPCConsoleAction;
     QAction *openAction;
@@ -170,8 +180,8 @@ private:
     QAction *lockWalletAction;
     QAction *toggleStakingAction;
     QAction *splitRewardAction;
-    QToolButton *menuBtns[5];
-    QLabel *menuBubbles[5];
+    QToolButton *menuBtns[6];
+    QLabel *menuBubbles[6];
     QLabel *notifications[3];
 
     QSystemTrayIcon *trayIcon;
@@ -184,6 +194,10 @@ private:
 #ifdef Q_OS_MAC
     CAppNapInhibitor* appNapInhibitor = nullptr;
 #endif
+
+#ifdef ENABLE_WALLET
+    bool fStaking = false;
+#endif // ENABLE_WALLET
 
     /** Keep track of previous number of blocks, to detect progress */
     int prevBlocks;
@@ -248,12 +262,17 @@ public Q_SLOTS:
     */
     void message(const QString &title, const QString &message, unsigned int style, bool *ret = NULL);
 
+    /** Prompt use for pin */
+    void askForPin(std::string *ret);
+
 #ifdef ENABLE_WALLET
     /** Set the encryption status as shown in the UI.
        @param[in] status            current encryption status
        @see WalletModel::EncryptionStatus
     */
     void setEncryptionStatus(int status);
+
+    void setEncryptionTxStatus(bool fCrypted);
 
     bool handlePaymentRequest(const SendCoinsRecipient& recipient);
 
@@ -267,6 +286,8 @@ private Q_SLOTS:
     void gotoOverviewPage();
     /** Switch to history (transactions) page */
     void gotoHistoryPage();
+    /** Switch to settings page */
+    void gotoSettingsPage();
     /** Switch to community fund page*/
     void gotoCommunityFundPage();
     /** Switch to receive coins page */
@@ -324,6 +345,9 @@ private Q_SLOTS:
 #ifndef Q_OS_MAC
     /** Handle tray icon clicked */
     void trayIconActivated(QSystemTrayIcon::ActivationReason reason);
+#else
+    /** Handle macOS Dock icon clicked */
+    void macosDockIconActivated();
 #endif
 
     /** Show window if hidden, unminimize when minimized, rise when obscured or show if hidden and fToggleHidden is true */

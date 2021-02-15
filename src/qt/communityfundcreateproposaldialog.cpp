@@ -146,6 +146,9 @@ void CommunityFundCreateProposalDialog::click_pushButtonCreateProposal()
         if (IsDAOEnabled(chainActive.Tip(), Params().GetConsensus()))
             nVersion |= CProposal::ABSTAIN_VOTE_VERSION;
 
+        if (IsExcludeEnabled(chainActive.Tip(), Params().GetConsensus()))
+            nVersion |= CProposal::EXCLUDE_VERSION;
+
         strDZeel.pushKV("n",nReqAmount);
         strDZeel.pushKV("a",Address);
         strDZeel.pushKV("d",nDeadline);
@@ -219,12 +222,14 @@ void CommunityFundCreateProposalDialog::click_pushButtonCreateProposal()
 
                 bool created_proposal = true;
 
-                if (!pwalletMain->CreateTransaction(vecSend, wtx, reservekey, nFeeRequired, nChangePosRet, strError, nullptr, true)) {
+                std::vector<shared_ptr<CReserveBLSCTBlindingKey>> reserveBLSCTKey;
+
+                if (!pwalletMain->CreateTransaction(vecSend, wtx, reservekey, reserveBLSCTKey, nFeeRequired, nChangePosRet, strError, false, nullptr, true)) {
                     if (!fSubtractFeeFromAmount && nValue + nFeeRequired > pwalletMain->GetBalance()) {
                         created_proposal = false;
                     }
                 }
-                if (!pwalletMain->CommitTransaction(wtx, reservekey)) {
+                if (!pwalletMain->CommitTransaction(wtx, reservekey, reserveBLSCTKey)) {
                     created_proposal = false;
                 }
 

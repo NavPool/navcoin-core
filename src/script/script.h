@@ -685,8 +685,6 @@ public:
     bool IsColdStaking() const;
     bool IsColdStakingv2() const;
 
-    bool IsColdStake() const;
-
     bool IsPayToScriptHash() const;
     bool IsPayToWitnessScriptHash() const;
     bool IsWitnessProgram(int& version, std::vector<unsigned char>& program) const;
@@ -710,6 +708,7 @@ public:
     bool IsConsultationVoteRemove() const;
 
     bool IsPool() const;
+    bool IsFee() const;
     bool ExtractVote(uint256 &hash, int64_t &vote) const;
     bool ExtractSupportVote(uint256 &hash, int64_t &vote) const;
     bool ExtractConsultationVote(uint256 &hash, int64_t &vote) const;

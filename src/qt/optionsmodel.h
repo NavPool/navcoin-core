@@ -9,10 +9,6 @@
 
 #include <QAbstractListModel>
 
-QT_BEGIN_NAMESPACE
-class QNetworkProxy;
-QT_END_NAMESPACE
-
 /** Interface from Qt to configuration data structure for NavCoin client.
    To Qt, the options are presented as a list with the different options
    laid out vertically.
@@ -57,6 +53,7 @@ public:
     int rowCount(const QModelIndex & parent = QModelIndex()) const;
     QVariant data(const QModelIndex & index, int role = Qt::DisplayRole) const;
     bool setData(const QModelIndex & index, const QVariant & value, int role = Qt::EditRole);
+    void setDirty(bool dirty);
     /** Updates current unit in memory, settings and emits displayUnitChanged(newUnit) signal */
     void setDisplayUnit(const QVariant &value);
     void setCoinControlFeatures(const bool enabled);
@@ -67,13 +64,13 @@ public:
     bool getMinimizeOnClose() { return fMinimizeOnClose; }
     int getDisplayUnit() { return nDisplayUnit; }
     QString getThirdPartyTxUrls() { return strThirdPartyTxUrls; }
-    bool getProxySettings(QNetworkProxy& proxy) const;
     bool getCoinControlFeatures() { return fCoinControlFeatures; }
     const QString& getOverriddenByCommandLine() { return strOverriddenByCommandLine; }
 
     /* Restart flag helper */
     void setRestartRequired(bool fRequired);
     bool isRestartRequired();
+    bool isDirty();
 
 private:
     /* Qt-only settings */
@@ -86,6 +83,7 @@ private:
     int nDisplayUnit;
     QString strThirdPartyTxUrls;
     bool fCoinControlFeatures;
+    bool fDirty = false;
     /* settings that were overriden by command-line */
     QString strOverriddenByCommandLine;
 

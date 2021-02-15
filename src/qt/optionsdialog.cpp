@@ -9,9 +9,10 @@
 #include <qt/optionsdialog.h>
 #include <ui_optionsdialog.h>
 
-#include <qt/navcoinunits.h>
 #include <qt/guiutil.h>
+#include <qt/navcoinunits.h>
 #include <qt/optionsmodel.h>
+#include <qt/platformstyle.h>
 
 #include <chainparams.h>
 #include <main.h> // for DEFAULT_SCRIPTCHECK_THREADS and MAX_SCRIPTCHECK_THREADS
@@ -33,11 +34,12 @@
 #include <QSettings>
 #include <QTimer>
 
-OptionsDialog::OptionsDialog(QWidget *parent, bool enableWallet) :
+OptionsDialog::OptionsDialog(const PlatformStyle *platformStyle, QWidget *parent) :
     QDialog(parent),
     ui(new Ui::OptionsDialog),
     model(0),
-    mapper(0)
+    mapper(0),
+    platformStyle(platformStyle)
 {
     ui->setupUi(this);
 
@@ -60,6 +62,16 @@ OptionsDialog::OptionsDialog(QWidget *parent, bool enableWallet) :
     ui->proxyPortTor->setEnabled(false);
     ui->proxyPortTor->setValidator(new QIntValidator(1, 65535, this));
 
+    ui->mixingDefaultBox->addItem("Always ask");
+    ui->mixingDefaultBox->addItem("Yes");
+    ui->mixingDefaultBox->addItem("No");
+
+    connect(ui->mixingDefaultBox, static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged), [=]( int ix ) {
+        QSettings settings;
+
+        settings.setValue("defaultPrivacy", ix == -1 ? 2 : (ix == 1 ? 1 : 0));
+    });
+
     connect(ui->connectSocks, SIGNAL(toggled(bool)), ui->proxyIp, SLOT(setEnabled(bool)));
     connect(ui->connectSocks, SIGNAL(toggled(bool)), ui->proxyPort, SLOT(setEnabled(bool)));
     connect(ui->connectSocks, SIGNAL(toggled(bool)), this, SLOT(updateProxyValidationState()));
@@ -81,10 +93,14 @@ OptionsDialog::OptionsDialog(QWidget *parent, bool enableWallet) :
     ui->tabWidget->removeTab(ui->tabWidget->indexOf(ui->tabWindow));
 #endif
 
+#ifdef ENABLE_WALLET
     /* remove Wallet tab in case of -disablewallet */
-    if (!enableWallet) {
+    if (GetBoolArg("-disablewallet", false)) {
+#endif // ENABLE_WALLET
         ui->tabWidget->removeTab(ui->tabWidget->indexOf(ui->tabWallet));
+#ifdef ENABLE_WALLET
     }
+#endif
 
     /* Display elements init */
     QDir translations(":translations");
@@ -146,6 +162,24 @@ void OptionsDialog::setModel(OptionsModel *model)
 
     ui->voteTextField->setText(QString::fromStdString(GetArg("-stakervote","")));
     ui->voteQuestionLabel->setText(settings.value("votingQuestion", "").toString());
+    ui->maxmixfeeText->setDisplayUnit(model->getDisplayUnit());
+    ui->maxmixfeeText->setValue(GetArg("-aggregationmaxfee", DEFAULT_MAX_MIX_FEE));
+    ui->mixTimeout->setValue(settings.value("aggregationSessionWait", 15).toInt());
+
+    int defaultPrivacy = settings.value("defaultPrivacy", 0).toInt();
+
+    if (defaultPrivacy == 1)
+    {
+        ui->mixingDefaultBox->setCurrentIndex(1);
+    }
+    else if (defaultPrivacy == -1)
+    {
+        ui->mixingDefaultBox->setCurrentIndex(2);
+    }
+    else
+    {
+        ui->mixingDefaultBox->setCurrentIndex(0);
+    }
 
     if(model)
     {
@@ -181,6 +215,40 @@ void OptionsDialog::setModel(OptionsModel *model)
     connect(ui->theme, SIGNAL(valueChanged()), this, SLOT(showRestartWarning()));
     connect(ui->scaling, SIGNAL(valueChanged(int)), this, SLOT(showRestartWarning()));
     connect(ui->thirdPartyTxUrls, SIGNAL(textChanged(const QString &)), this, SLOT(showRestartWarning()));
+
+    /* Main */
+    connect(ui->navcoinAtStartup, SIGNAL(clicked(bool)), this, SLOT(markModelDirty()));
+    connect(ui->threadsScriptVerif, SIGNAL(valueChanged(int)), this, SLOT(markModelDirty()));
+    connect(ui->databaseCache, SIGNAL(valueChanged(int)), this, SLOT(markModelDirty()));
+
+    /* Wallet */
+    connect(ui->spendZeroConfChange, SIGNAL(clicked(bool)), this, SLOT(markModelDirty()));
+
+    /* Network */
+    connect(ui->mapPortUpnp, SIGNAL(clicked(bool)), this, SLOT(markModelDirty()));
+    connect(ui->allowIncoming, SIGNAL(clicked(bool)), this, SLOT(markModelDirty()));
+
+    connect(ui->connectSocks, SIGNAL(clicked(bool)), this, SLOT(markModelDirty()));
+    connect(ui->proxyIp, SIGNAL(textChanged(const QString &)), this, SLOT(markModelDirty()));
+    connect(ui->proxyPort, SIGNAL(textChanged(const QString &)), this, SLOT(markModelDirty()));
+
+    connect(ui->connectSocksTor, SIGNAL(clicked(bool)), this, SLOT(markModelDirty()));
+    connect(ui->proxyIpTor, SIGNAL(textChanged(const QString &)), this, SLOT(markModelDirty()));
+    connect(ui->proxyPortTor, SIGNAL(textChanged(const QString &)), this, SLOT(markModelDirty()));
+
+    /* Window */
+#ifndef Q_OS_MAC
+    connect(ui->hideTrayIcon, SIGNAL(clicked(bool)), this, SLOT(markModelDirty()));
+    connect(ui->minimizeToTray, SIGNAL(clicked(bool)), this, SLOT(markModelDirty()));
+    connect(ui->minimizeOnClose, SIGNAL(clicked(bool)), this, SLOT(markModelDirty()));
+#endif
+
+    /* Display */
+    connect(ui->lang, SIGNAL(valueChanged()), this, SLOT(markModelDirty()));
+    connect(ui->unit, SIGNAL(valueChanged()), this, SLOT(markModelDirty()));
+    connect(ui->theme, SIGNAL(valueChanged()), this, SLOT(markModelDirty()));
+    connect(ui->scaling, SIGNAL(valueChanged(int)), this, SLOT(markModelDirty()));
+    connect(ui->thirdPartyTxUrls, SIGNAL(textChanged(const QString &)), this, SLOT(markModelDirty()));
 }
 
 void OptionsDialog::setMapper()
@@ -192,7 +260,6 @@ void OptionsDialog::setMapper()
 
     /* Wallet */
     mapper->addMapping(ui->spendZeroConfChange, OptionsModel::SpendZeroConfChange);
-    mapper->addMapping(ui->coinControlFeatures, OptionsModel::CoinControlFeatures);
 
     /* Network */
     mapper->addMapping(ui->mapPortUpnp, OptionsModel::MapPortUPnP);
@@ -221,22 +288,39 @@ void OptionsDialog::setMapper()
     mapper->addMapping(ui->thirdPartyTxUrls, OptionsModel::ThirdPartyTxUrls);
 }
 
+void OptionsDialog::markModelDirty()
+{
+    info("MODEL DIRTY");
+    model->setDirty(true);
+}
+
 void OptionsDialog::setOkButtonState(bool fState)
 {
     ui->okButton->setEnabled(fState);
 }
 
 void OptionsDialog::on_resetButton_clicked()
-{
+{   
     if(model)
     {
         // confirmation dialog
         QMessageBox::StandardButton btnRetVal = QMessageBox::question(this, tr("Confirm options reset"),
-            tr("Client restart required to activate changes.") + "<br><br>" + tr("Client will be shut down. Do you want to proceed?"),
-            QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+                tr("Client restart required to activate changes.") + "<br><br>" + tr("Client will be shut down. Do you want to proceed?"),
+                QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
 
         if(btnRetVal == QMessageBox::Cancel)
             return;
+
+        SoftSetArg("-defaultmixin", std::to_string(GetArg("-defaultmixin", DEFAULT_TX_MIXCOINS)), true);
+        RemoveConfigFile("defaultmixin");
+        WriteConfigFile("defaultmixin", std::to_string(GetArg("-defaultmixin", DEFAULT_TX_MIXCOINS)));
+
+        QSettings settings;
+        settings.setValue("aggregationSessionWait", settings.value("aggregationSessionWait", 15));
+
+        SoftSetArg("-aggregationmaxfee", std::to_string(GetArg("-aggregationmaxfee", DEFAULT_MAX_MIX_FEE)), true);
+        RemoveConfigFile("aggregationmaxfee");
+        WriteConfigFile("aggregationmaxfee", std::to_string(GetArg("-aggregationmaxfee", DEFAULT_MAX_MIX_FEE)));
 
         /* reset all options and close GUI */
         model->Reset();
@@ -246,18 +330,27 @@ void OptionsDialog::on_resetButton_clicked()
 
 void OptionsDialog::on_okButton_clicked()
 {
+    SoftSetArg("-aggregationmaxfee", std::to_string(ui->maxmixfeeText->value()), true);
+    RemoveConfigFile("aggregationmaxfee");
+    WriteConfigFile("aggregationmaxfee", std::to_string(ui->maxmixfeeText->value()));
+
+    QSettings settings;
+    settings.setValue("aggregationSessionWait", ui->mixTimeout->value());
+
     mapper->submit();
-    accept();
+    model->setDirty(false);
     updateDefaultProxyNets();
+
+    QMessageBox::information(this, tr("Changes saved"), tr("Changes have been saved!"));
 }
 
 void OptionsDialog::on_openNavCoinConfButton_clicked()
 {
-      QMessageBox::information(this, tr("Configuration options"),
+    QMessageBox::information(this, tr("Configuration options"),
             tr("The configuration is used to specify advanced user options less any command-line or Qt options. "
-            "Any command-line options will override this configuration file."));
-      GUIUtil::openNavCoinConf();
- }
+                "Any command-line options will override this configuration file."));
+    GUIUtil::openNavCoinConf();
+}
 
 void OptionsDialog::on_cancelButton_clicked()
 {
@@ -346,7 +439,7 @@ void OptionsDialog::updateDefaultProxyNets()
 }
 
 ProxyAddressValidator::ProxyAddressValidator(QObject *parent) :
-QValidator(parent)
+    QValidator(parent)
 {
 }
 
@@ -354,7 +447,7 @@ QValidator::State ProxyAddressValidator::validate(QString &input, int &pos) cons
 {
     Q_UNUSED(pos);
     // Validate the proxy
-    proxyType addrProxy = proxyType(CService(input.toStdString(), 9050), true);
+    proxyType addrProxy = proxyType(CService(input.toStdString(), GetArg("-torsocksport", 9044)), true);
     if (addrProxy.IsValid())
         return QValidator::Acceptable;
 

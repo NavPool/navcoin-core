@@ -34,6 +34,8 @@ enum DeploymentPos
     DEPLOYMENT_DAO_CONSENSUS,
     DEPLOYMENT_COLDSTAKING_V2,
     DEPLOYMENT_POOL_FEE,
+    DEPLOYMENT_BLSCT,
+    DEPLOYMENT_EXCLUDE,
     MAX_VERSION_BITS_DEPLOYMENTS
 };
 
@@ -55,7 +57,9 @@ static std::string sDeploymentsDesc[Consensus::MAX_VERSION_BITS_DEPLOYMENTS] = {
     "Enable DAO Consultations",
     "Enables remote DAO voting from light wallets",
     "Enables the decision over consensus parameters using distributed voting",
-    "Allows staking pools to charge a fee"
+    "Allows staking pools to charge a fee",
+    "Activates the privacy protocol blsCT and the private token xNAV",
+    "Excludes inactive voters from the DAO quorums"
 };
 
 /**
