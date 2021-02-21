@@ -1,4 +1,4 @@
-// Copyright (c) 2020 The NavCoin developers
+// Copyright (c) 2020 The Navcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -19,6 +19,7 @@
 #include <amount.h>
 #include <blsct/scalar.h>
 #include <bls.hpp>
+#include <streams.h>
 #include <utilstrencodings.h>
 
 #include <boost/thread/mutex.hpp>
@@ -44,6 +45,33 @@ class BulletproofsRangeproof
 {
 public:
     BulletproofsRangeproof() {}
+
+    BulletproofsRangeproof(std::vector<unsigned char> vData) {
+        try
+        {
+            CDataStream strm(vData, 0, 0);
+            strm >> *this;
+        }
+        catch(...)
+        {
+
+        }
+    }
+
+    std::vector<unsigned char> GetVch() const
+    {
+        try
+        {
+            CDataStream strm(0, 0);
+            strm << *this;
+            return std::vector<unsigned char>(strm.begin(), strm.end());
+        }
+        catch(...)
+        {
+
+        }
+        return std::vector<unsigned char>();
+    }
 
     static bool Init();
 

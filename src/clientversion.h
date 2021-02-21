@@ -16,7 +16,7 @@
 //! These need to be macros, as clientversion.cpp's and navcoin*-res.rc's voodoo requires it
 #define CLIENT_VERSION_MAJOR 6
 #define CLIENT_VERSION_MINOR 0
-#define CLIENT_VERSION_REVISION 0
+#define CLIENT_VERSION_REVISION 2
 #define CLIENT_VERSION_BUILD 0
 
 //! Set to true for release, false for prerelease or test build
@@ -26,7 +26,7 @@
 #define CLIENT_BUILD_IS_RELEASE_CANDIDATE false
 
 /* Build is a test release */
-#define CLIENT_BUILD_IS_TEST_RELEASE true
+#define CLIENT_BUILD_IS_TEST_RELEASE false
 
 /**
  * Copyright year (2009-this)
