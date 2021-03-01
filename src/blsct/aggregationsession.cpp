@@ -1,4 +1,4 @@
-// Copyright (c) 2020 The NavCoin developers
+// Copyright (c) 2020 The Navcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -179,6 +179,8 @@ bool AggregationSession::SelectCandidates(CandidateTransaction &ret)
     unsigned int i = 0;
     unsigned int nSelected = 0;
 
+    std::set<uint256> setSeen;
+
     while (nSelected < nSelect && i < vTransactionCandidates.size())
     {
         if (!inputs->HaveInputs(vTransactionCandidates[i].tx))
@@ -202,6 +204,15 @@ bool AggregationSession::SelectCandidates(CandidateTransaction &ret)
         for (unsigned int j = 0; j < vTransactionCandidates[i].tx.vin.size(); j++)
         {
             COutPoint prevOut = vTransactionCandidates[i].tx.vin[j].prevout;
+
+            if (setSeen.count(prevOut.GetHash()))
+            {
+                i++;
+                fShouldIContinue = true;
+                break;
+            }
+
+            setSeen.insert(prevOut.GetHash());
 
             if (pwalletMain->mapWallet.count(prevOut.hash))
             {
@@ -923,7 +934,7 @@ CAmount AggregationSession::GetMaxFee()
 
 void AggregationSessionThread()
 {
-    LogPrintf("NavCoinCandidateCoinsThread started\n");
+    LogPrintf("NavcoinCandidateCoinsThread started\n");
     SetThreadPriority(THREAD_PRIORITY_LOWEST);
     RenameThread("navcoin-candidate-coins");
 
@@ -935,7 +946,7 @@ void AggregationSessionThread()
                     LOCK(cs_vNodes);
                     fvNodesEmpty = vNodes.empty();
                 }
-                if (!fvNodesEmpty && !IsInitialBlockDownload() && IsBLSCTEnabled(chainActive.Tip(), Params().GetConsensus()))
+                if (!fvNodesEmpty && !IsInitialBlockDownload() && IsBLSCTEnabled(chainActive.Tip(), Params().GetConsensus()) && pwalletMain && pwalletMain->GetPrivateBalance() > 0)
                     break;
                 MilliSleep(1000);
             } while (true);
@@ -966,19 +977,19 @@ void AggregationSessionThread()
     }
     catch (const boost::thread_interrupted&)
     {
-        LogPrintf("NavCoinCandidateCoinsThread terminated\n");
+        LogPrintf("NavcoinCandidateCoinsThread terminated\n");
         throw;
     }
     catch (const std::runtime_error &e)
     {
-        LogPrintf("NavCoinCandidateCoinsThread runtime error: %s\n", e.what());
+        LogPrintf("NavcoinCandidateCoinsThread runtime error: %s\n", e.what());
         return;
     }
 }
 
 void CandidateVerificationThread()
 {
-    LogPrintf("NavCoinCandidateVerificationThread started\n");
+    LogPrintf("NavcoinCandidateVerificationThread started\n");
     SetThreadPriority(THREAD_PRIORITY_LOWEST);
     RenameThread("navcoin-candidate-coins-verification");
 
@@ -990,7 +1001,7 @@ void CandidateVerificationThread()
                     LOCK(cs_vNodes);
                     fvNodesEmpty = vNodes.empty();
                 }
-                if (!fvNodesEmpty && !IsInitialBlockDownload() && pwalletMain && pwalletMain->aggSession && pwalletMain->aggSession->inputs && IsBLSCTEnabled(chainActive.Tip(), Params().GetConsensus()))
+                if (!fvNodesEmpty && !IsInitialBlockDownload() && pwalletMain && pwalletMain->aggSession && pwalletMain->aggSession->inputs && IsBLSCTEnabled(chainActive.Tip(), Params().GetConsensus()) && pwalletMain->GetPrivateBalance() > 0)
                     break;
                 MilliSleep(1000);
             } while (true);
@@ -1054,12 +1065,12 @@ void CandidateVerificationThread()
     }
     catch (const boost::thread_interrupted&)
     {
-        LogPrintf("NavCoinCandidateVerificationThread terminated\n");
+        LogPrintf("NavcoinCandidateVerificationThread terminated\n");
         throw;
     }
     catch (const std::runtime_error &e)
     {
-        LogPrintf("NavCoinCandidateVerificationThread runtime error: %s\n", e.what());
+        LogPrintf("NavcoinCandidateVerificationThread runtime error: %s\n", e.what());
         return;
     }
 }

@@ -62,6 +62,11 @@ public:
         return !(a == b);
     }
 
+    uint256 GetHash() const
+    {
+        return SerializeHash(*this, SER_GETHASH, SERIALIZE_TRANSACTION_NO_WITNESS);
+    }
+
     std::string ToString() const;
 };
 
@@ -154,7 +159,7 @@ class CTxOut
 public:
     CAmount nValue;
     CScript scriptPubKey;
-    BulletproofsRangeproof bp;
+    std::vector<uint8_t> bp;
     std::vector<uint8_t> ephemeralKey;
     std::vector<uint8_t> outputKey;
     std::vector<uint8_t> spendingKey;
@@ -180,7 +185,9 @@ public:
                 READWRITE(ephemeralKey);
                 READWRITE(outputKey);
                 READWRITE(spendingKey);
-                READWRITE(bp);
+                BulletproofsRangeproof bp_;
+                READWRITE(bp_);
+                bp = bp_.GetVch();
             }
             READWRITE(*(CScriptBase*)(&scriptPubKey));
         }
@@ -194,7 +201,8 @@ public:
                 READWRITE(ephemeralKey);
                 READWRITE(outputKey);
                 READWRITE(spendingKey);
-                READWRITE(bp);
+                BulletproofsRangeproof bp_(bp);
+                READWRITE(bp_);
             }
             else
             {
@@ -213,6 +221,13 @@ public:
         spendingKey.clear();
     }
 
+    BulletproofsRangeproof GetBulletproof() const
+    {
+        if (bp.size() == 0)
+            return BulletproofsRangeproof();
+        return BulletproofsRangeproof(bp);
+    }
+
     bool IsBLSCT() const
     {
         return ephemeralKey.size() > 0 || spendingKey.size() > 0 || outputKey.size() > 0;
@@ -220,7 +235,7 @@ public:
 
     bool HasRangeProof() const
     {
-        return bp.V.size() > 0;
+        return GetBulletproof().V.size() > 0;
     }
 
     bool IsNull() const
