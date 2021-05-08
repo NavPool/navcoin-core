@@ -39,8 +39,8 @@ static CCriticalSection cs_nWalletUnlockTime;
 std::string HelpRequiringPassphrase()
 {
     return pwalletMain && pwalletMain->IsCrypted()
-            ? "\nRequires wallet passphrase to be set with walletpassphrase call."
-            : "";
+           ? "\nRequires wallet passphrase to be set with walletpassphrase call."
+           : "";
 }
 
 bool EnsureWalletIsAvailable(bool avoidException)
@@ -102,7 +102,7 @@ void WalletTxToJSON(const CWalletTx& wtx, UniValue& entry)
     entry.pushKV("bip125-replaceable", rbfStatus);
 
     for(const PAIRTYPE(string,string)& item: wtx.mapValue)
-        entry.pushKV(item.first, item.second);
+    entry.pushKV(item.first, item.second);
 }
 
 string AccountFromValue(const UniValue& value)
@@ -125,7 +125,7 @@ UniValue createrawscriptaddress(const UniValue& params, bool fHelp)
                 "\"navcoinaddress\"    (string) The  navcoin address\n"
                 "\nExamples:\n"
                 + HelpExampleCli("createrawscriptaddress", "6ac4c5")
-                );
+        );
 
     std::string data = params[0].get_str();
 
@@ -176,7 +176,7 @@ UniValue listprivateunspent(const UniValue& params, bool fHelp)
                                                                                                            "\nExamples\n"
                 + HelpExampleCli("listprivateunspent", "")
                 + HelpExampleCli("listprivateunspent", "6 9999999")
-                );
+        );
 
     RPCTypeCheck(params, boost::assign::list_of(UniValue::VNUM)(UniValue::VNUM)(UniValue::VARR));
 
@@ -228,7 +228,7 @@ UniValue getnewaddress(const UniValue& params, bool fHelp)
                 "\nExamples:\n"
                 + HelpExampleCli("getnewaddress", "")
                 + HelpExampleRpc("getnewaddress", "")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -256,16 +256,16 @@ UniValue getcoldstakingaddress(const UniValue& params, bool fHelp)
 
     if (fHelp || params.size() < 2)
         throw runtime_error(
-            "getcoldstakingaddress \"stakingaddress\" \"spendingaddress\" ( \"votingaddress\" )\n"
-            "Returns a coldstaking address based on the address inputs\n"
-            "Arguments:\n"
-            "1. \"stakingaddress\"  (string, required) The navcoin staking address.\n"
-            "2. \"spendingaddress\" (string, required) The navcoin spending address.\n\n"
-            "3. \"voting\"          (string, optional) The navcoin voting address.\n\n"
-            "\nExamples:\n"
-            + HelpExampleCli("getcoldstakingaddress", "\"mqyGZvLYfEH27Zk3z6JkwJgB1zpjaEHfiW\" \"mrfjgazyerYxDQHJAPDdUcC3jpmi8WZ2uv\"") +
-            "\nAs a json rpc call\n"
-            + HelpExampleRpc("getcoldstakingaddress", "\"mqyGZvLYfEH27Zk3z6JkwJgB1zpjaEHfiW\", \"mrfjgazyerYxDQHJAPDdUcC3jpmi8WZ2uv\"")
+                "getcoldstakingaddress \"stakingaddress\" \"spendingaddress\" ( \"votingaddress\" )\n"
+                "Returns a coldstaking address based on the address inputs\n"
+                "Arguments:\n"
+                "1. \"stakingaddress\"  (string, required) The navcoin staking address.\n"
+                "2. \"spendingaddress\" (string, required) The navcoin spending address.\n\n"
+                "3. \"voting\"          (string, optional) The navcoin voting address.\n\n"
+                "\nExamples:\n"
+                + HelpExampleCli("getcoldstakingaddress", "\"mqyGZvLYfEH27Zk3z6JkwJgB1zpjaEHfiW\" \"mrfjgazyerYxDQHJAPDdUcC3jpmi8WZ2uv\"") +
+                "\nAs a json rpc call\n"
+                + HelpExampleRpc("getcoldstakingaddress", "\"mqyGZvLYfEH27Zk3z6JkwJgB1zpjaEHfiW\", \"mrfjgazyerYxDQHJAPDdUcC3jpmi8WZ2uv\"")
         );
 
     if (!IsColdStakingEnabled(chainActive.Tip(),Params().GetConsensus()))
@@ -274,12 +274,12 @@ UniValue getcoldstakingaddress(const UniValue& params, bool fHelp)
 
     if (!IsColdStakingv2Enabled(chainActive.Tip(), Params().GetConsensus()) && params.size() == 3)
         throw runtime_error(
-            "Cold Staking v2 is not active yet.");
+                "Cold Staking v2 is not active yet.");
 
     if (params[0].get_str() == params[1].get_str())
         throw runtime_error(
                 "The staking address should be different to the spending address"
-                );
+        );
 
 
     CNavcoinAddress stakingAddress(params[0].get_str());
@@ -338,7 +338,7 @@ UniValue getaccountaddress(const UniValue& params, bool fHelp)
                 + HelpExampleCli("getaccountaddress", "\"\"")
                 + HelpExampleCli("getaccountaddress", "\"myaccount\"")
                 + HelpExampleRpc("getaccountaddress", "\"myaccount\"")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -367,7 +367,7 @@ UniValue getrawchangeaddress(const UniValue& params, bool fHelp)
                 "\nExamples:\n"
                 + HelpExampleCli("getrawchangeaddress", "")
                 + HelpExampleRpc("getrawchangeaddress", "")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -402,7 +402,7 @@ UniValue setaccount(const UniValue& params, bool fHelp)
                 "\nExamples:\n"
                 + HelpExampleCli("setaccount", "\"1D1ZrZNe3JUo7ZycKEYQQiQAWd9y54F4XZ\" \"tabby\"")
                 + HelpExampleRpc("setaccount", "\"1D1ZrZNe3JUo7ZycKEYQQiQAWd9y54F4XZ\", \"tabby\"")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -449,7 +449,7 @@ UniValue getaccount(const UniValue& params, bool fHelp)
                 "\nExamples:\n"
                 + HelpExampleCli("getaccount", "\"1D1ZrZNe3JUo7ZycKEYQQiQAWd9y54F4XZ\"")
                 + HelpExampleRpc("getaccount", "\"1D1ZrZNe3JUo7ZycKEYQQiQAWd9y54F4XZ\"")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -484,7 +484,7 @@ UniValue getaddressesbyaccount(const UniValue& params, bool fHelp)
                 "\nExamples:\n"
                 + HelpExampleCli("getaddressesbyaccount", "\"tabby\"")
                 + HelpExampleRpc("getaddressesbyaccount", "\"tabby\"")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -513,7 +513,7 @@ UniValue listprivateaddresses(const UniValue& params, bool fHelp)
                 "\nList the private addresses of the wallet.\n"
                 "\nExample:\n"
                 + HelpExampleCli("listprivateaddresses", "")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -552,7 +552,7 @@ static void SendMoney(const CTxDestination &address, CAmount nValue, bool fSubtr
     CScript scriptPubKey = GetScriptForDestination(address);
 
     if(donate)
-      SetScriptForCommunityFundContribution(scriptPubKey);
+        SetScriptForCommunityFundContribution(scriptPubKey);
 
     // Create and send the transaction
     CReserveKey reservekey(pwalletMain);
@@ -606,7 +606,7 @@ UniValue generateblsctkeys(const UniValue& params, bool fHelp)
         throw runtime_error(
                 "generateblsctkeys\n"
                 "\nGenerates the BLSCT keys.\n"
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -658,7 +658,7 @@ UniValue sendtoaddress(const UniValue& params, bool fHelp)
                 + HelpExampleCli("sendtoaddress", "\"1M72Sfpbz1BPpXFHz9m3CdqATR44Jvaydd\" 0.1 \"donation\" \"seans outpost\"")
                 + HelpExampleCli("sendtoaddress", "\"1M72Sfpbz1BPpXFHz9m3CdqATR44Jvaydd\" 0.1 \"\" \"\" \"\" true")
                 + HelpExampleRpc("sendtoaddress", "\"1M72Sfpbz1BPpXFHz9m3CdqATR44Jvaydd\", 0.1, \"donation\", \"seans outpost\"")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -747,7 +747,7 @@ UniValue privatesendtoaddress(const UniValue& params, bool fHelp)
                 + HelpExampleCli("privatesendtoaddress", "\"1M72Sfpbz1BPpXFHz9m3CdqATR44Jvaydd\" 0.1 \"donation\" \"seans outpost\"")
                 + HelpExampleCli("privatesendtoaddress", "\"1M72Sfpbz1BPpXFHz9m3CdqATR44Jvaydd\" 0.1 \"\" \"\" true")
                 + HelpExampleRpc("privatesendtoaddress", "\"1M72Sfpbz1BPpXFHz9m3CdqATR44Jvaydd\", 0.1, \"donation\", \"seans outpost\"")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -832,22 +832,22 @@ UniValue privatesendmixtoaddress(const UniValue& params, bool fHelp)
                 "\nArguments:\n"
                 "1. \"navcoinaddress\"  (string, required) The navcoin address to send to.\n"
                 "2. \"amount\"      (numeric or string, required) The amount in " + CURRENCY_UNIT + " to send. eg 0.1\n"
-                "3. \"comment\"     (string, optional) A comment used to store what the transaction is for. \n"
-                "                             This is part of the transaction and will be seen by the receiver. Max 54 chars.\n"
-                "4. \"comment-to\"  (string, optional) A comment to store the name of the person or organization \n"
-                "                             to which you're sending the transaction. This is not part of the \n"
-                "                             transaction, just kept in your wallet.\n"
-                "5. \"strdzeel\"            (string, optional) Attached string metadata \n"
-                "6. subtractfeefromamount  (boolean, optional, default=false) The fee will be deducted from the amount being sent.\n"
-                "                             The recipient will receive less navcoins than you enter in the amount field.\n"
-                "\nResult:\n"
-                "\"transactionid\"  (string) The transaction id.\n"
-                "\nExamples:\n"
+                                                                                                    "3. \"comment\"     (string, optional) A comment used to store what the transaction is for. \n"
+                                                                                                    "                             This is part of the transaction and will be seen by the receiver. Max 54 chars.\n"
+                                                                                                    "4. \"comment-to\"  (string, optional) A comment to store the name of the person or organization \n"
+                                                                                                    "                             to which you're sending the transaction. This is not part of the \n"
+                                                                                                    "                             transaction, just kept in your wallet.\n"
+                                                                                                    "5. \"strdzeel\"            (string, optional) Attached string metadata \n"
+                                                                                                    "6. subtractfeefromamount  (boolean, optional, default=false) The fee will be deducted from the amount being sent.\n"
+                                                                                                    "                             The recipient will receive less navcoins than you enter in the amount field.\n"
+                                                                                                    "\nResult:\n"
+                                                                                                    "\"transactionid\"  (string) The transaction id.\n"
+                                                                                                    "\nExamples:\n"
                 + HelpExampleCli("privatesendmixtoaddress", "\"1M72Sfpbz1BPpXFHz9m3CdqATR44Jvaydd\" 0.1")
                 + HelpExampleCli("privatesendmixtoaddress", "\"1M72Sfpbz1BPpXFHz9m3CdqATR44Jvaydd\" 0.1 \"donation\" \"seans outpost\"")
                 + HelpExampleCli("privatesendmixtoaddress", "\"1M72Sfpbz1BPpXFHz9m3CdqATR44Jvaydd\" 0.1 \"\" \"\" true")
                 + HelpExampleRpc("privatesendmixtoaddress", "\"1M72Sfpbz1BPpXFHz9m3CdqATR44Jvaydd\", 0.1, \"donation\", \"seans outpost\"")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -939,7 +939,7 @@ UniValue stakervote(const UniValue& params, bool fHelp)
                 "\nArguments:\n"
                 "1. \"vote\"               (string, required) The staker vote.\n"
                 + HelpExampleCli("stakervote", "yes")
-                );
+        );
 
     SoftSetArg("-stakervote",params[0].get_str());
     RemoveConfigFile("stakervote");
@@ -957,7 +957,7 @@ UniValue setexclude(const UniValue& params, bool fHelp)
                 "\nArguments:\n"
                 "1. \"bool\"               (bool, required) Whether to turn on or off.\n"
                 + HelpExampleCli("setexclude", "true")
-                );
+        );
 
     if (!params[0].isBool())
         throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid parameter, argument 1 must be a boolean");
@@ -979,23 +979,23 @@ UniValue createproposal(const UniValue& params, bool fHelp)
 
     if (fHelp || params.size() < 4)
         throw runtime_error(
-            "createproposal \"navcoinaddress\" \"amount\" duration \"desc\" ( fee dump_raw )\n"
-            "\nCreates a proposal for the community fund. Min fee of " + FormatMoney(GetConsensusParameter(Consensus::CONSENSUS_PARAM_PROPOSAL_MIN_FEE, view)) + "NAV is required.\n"
-            + HelpRequiringPassphrase() +
-            "\nArguments:\n"
-            "1. \"navcoinaddress\"       (string, required) The navcoin address where coins would be sent if proposal is approved.\n"
-            "2. \"amount\"               (numeric or string, required) The amount in " + CURRENCY_UNIT + " to request. eg 0.1\n"
-            "3. duration               (numeric, required) Number of seconds the proposal will exist after being accepted.\n"
-            "4. \"desc\"                 (string, required) Short description of the proposal.\n"
-            "5. fee                    (numeric, optional) Contribution to the fund used as fee.\n"
-            "6. dump_raw               (bool, optional) Dump the raw transaction instead of sending. Default: false\n"
-            "7. \"owneraddress\"         (string, optional) The owner of the proposal who will sign the payment requests. Default: the payment address\n"
-            "\nResult:\n"
-            "\"{ hash: proposalid,\"            (string) The proposal id.\n"
-            "\"  strDZeel: string }\"            (string) The attached strdzeel property.\n"
-            "\nExamples:\n"
-            + HelpExampleCli("createproposal", "\"NQFqqMUD55ZV3PJEJZtaKCsQmjLT6JkjvJ\" 1000 86400 \"Development\"")
-            + HelpExampleCli("createproposal", "\"NQFqqMUD55ZV3PJEJZtaKCsQmjLT6JkjvJ\" 12000 3600 \"Promotional stickers for everyone\" 100")
+                "createproposal \"navcoinaddress\" \"amount\" duration \"desc\" ( fee dump_raw )\n"
+                "\nCreates a proposal for the community fund. Min fee of " + FormatMoney(GetConsensusParameter(Consensus::CONSENSUS_PARAM_PROPOSAL_MIN_FEE, view)) + "NAV is required.\n"
+                + HelpRequiringPassphrase() +
+                "\nArguments:\n"
+                "1. \"navcoinaddress\"       (string, required) The navcoin address where coins would be sent if proposal is approved.\n"
+                "2. \"amount\"               (numeric or string, required) The amount in " + CURRENCY_UNIT + " to request. eg 0.1\n"
+                                                                                                             "3. duration               (numeric, required) Number of seconds the proposal will exist after being accepted.\n"
+                                                                                                             "4. \"desc\"                 (string, required) Short description of the proposal.\n"
+                                                                                                             "5. fee                    (numeric, optional) Contribution to the fund used as fee.\n"
+                                                                                                             "6. dump_raw               (bool, optional) Dump the raw transaction instead of sending. Default: false\n"
+                                                                                                             "7. \"owneraddress\"         (string, optional) The owner of the proposal who will sign the payment requests. Default: the payment address\n"
+                                                                                                             "\nResult:\n"
+                                                                                                             "\"{ hash: proposalid,\"            (string) The proposal id.\n"
+                                                                                                             "\"  strDZeel: string }\"            (string) The attached strdzeel property.\n"
+                                                                                                             "\nExamples:\n"
+                + HelpExampleCli("createproposal", "\"NQFqqMUD55ZV3PJEJZtaKCsQmjLT6JkjvJ\" 1000 86400 \"Development\"")
+                + HelpExampleCli("createproposal", "\"NQFqqMUD55ZV3PJEJZtaKCsQmjLT6JkjvJ\" 12000 3600 \"Promotional stickers for everyone\" 100")
         );
 
     if (!Params().GetConsensus().fDaoClientActivated)
@@ -1018,11 +1018,11 @@ UniValue createproposal(const UniValue& params, bool fHelp)
 
     CNavcoinAddress paddress(paymentAddress);
     if (!paddress.IsValid())
-      throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid Navcoin address for payment");
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid Navcoin address for payment");
 
     CNavcoinAddress oaddress(ownerAddress);
     if (!oaddress.IsValid())
-      throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid Navcoin address for the owner");
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid Navcoin address for the owner");
 
     CAmount nReqAmount = AmountFromValue(params[1]);
     int64_t nDeadline = params[2].get_int64();
@@ -1128,19 +1128,19 @@ UniValue proposeconsensuschange(const UniValue& params, bool fHelp)
 
     if (fHelp || params.size() < 2 || !params[0].isNum() || !params[1].isNum())
         throw runtime_error(
-            "proposeconsensuschange parameter value ( fee dump_raw )\n"
-            "\nCreates a proposal to the DAO for changing a consensus paremeter. Min fee of " + FormatMoney(nMinFee) + "NAV is required.\n"
-            + HelpRequiringPassphrase() +
-            "\nArguments:\n"
-            "1. parameter        (numeric, required) The parameter id as specified in the output of the getconsensusparameters rpc command.\n"
-            "2. value            (numeric, optional) The proposed value.\n"
-            "3. fee              (numeric, optional) Contribution to the fund used as fee.\n"
-            "4. dump_raw         (bool, optional) Dump the raw transaction instead of sending. Default: false\n"
-            "\nResult:\n"
-            "\"{ hash: consultation_id,\"            (string) The consultation id.\n"
-            "\"  strDZeel: string }\"            (string) The attached strdzeel property.\n"
-            "\nExamples:\n"
-            + HelpExampleCli("proposeconsensuschange", "1 10")
+                "proposeconsensuschange parameter value ( fee dump_raw )\n"
+                "\nCreates a proposal to the DAO for changing a consensus paremeter. Min fee of " + FormatMoney(nMinFee) + "NAV is required.\n"
+                + HelpRequiringPassphrase() +
+                "\nArguments:\n"
+                "1. parameter        (numeric, required) The parameter id as specified in the output of the getconsensusparameters rpc command.\n"
+                "2. value            (numeric, optional) The proposed value.\n"
+                "3. fee              (numeric, optional) Contribution to the fund used as fee.\n"
+                "4. dump_raw         (bool, optional) Dump the raw transaction instead of sending. Default: false\n"
+                "\nResult:\n"
+                "\"{ hash: consultation_id,\"            (string) The consultation id.\n"
+                "\"  strDZeel: string }\"            (string) The attached strdzeel property.\n"
+                "\nExamples:\n"
+                + HelpExampleCli("proposeconsensuschange", "1 10")
         );
 
     CNavcoinAddress address("NQFqqMUD55ZV3PJEJZtaKCsQmjLT6JkjvJ"); // Dummy address
@@ -1225,22 +1225,22 @@ UniValue createconsultation(const UniValue& params, bool fHelp)
 
     if (fHelp || params.size() < 1)
         throw runtime_error(
-            "createconsultation \"question\" ( min max range fee dump_raw )\n"
-            "\nCreates a consultation for the DAO. Min fee of " + FormatMoney(GetConsensusParameter(Consensus::CONSENSUS_PARAM_CONSULTATION_MIN_FEE, view)) + "NAV is required.\n"
-            + HelpRequiringPassphrase() +
-            "\nArguments:\n"
-            "1. \"question\"       (string, required) The question of the new consultation.\n"
-            "2. min              (numeric, optional) The minimum amount for the range. Only used if range equals true.\n"
-            "3. max              (numeric, optional) The maximum amount of answers a block can vote for.\n"
-            "4. range            (bool, optional) The consultation answers are exclusively in the range min-max.\n"
-            "5. fee              (numeric, optional) Contribution to the fund used as fee.\n"
-            "6. dump_raw         (bool, optional) Dump the raw transaction instead of sending. Default: false\n"
-            "\nResult:\n"
-            "\"{ hash: consultation_id,\"            (string) The consultation id.\n"
-            "\"  strDZeel: string }\"            (string) The attached strdzeel property.\n"
-            "\nExamples:\n"
-            + HelpExampleCli("createconsultation", "\"Who should be the CEO of Navcoin? /s\" 1 1")
-            + HelpExampleCli("createconsultation", "\"How much should Navcoin's CEO earn per month? /s\" 1000 5000 true")
+                "createconsultation \"question\" ( min max range fee dump_raw )\n"
+                "\nCreates a consultation for the DAO. Min fee of " + FormatMoney(GetConsensusParameter(Consensus::CONSENSUS_PARAM_CONSULTATION_MIN_FEE, view)) + "NAV is required.\n"
+                + HelpRequiringPassphrase() +
+                "\nArguments:\n"
+                "1. \"question\"       (string, required) The question of the new consultation.\n"
+                "2. min              (numeric, optional) The minimum amount for the range. Only used if range equals true.\n"
+                "3. max              (numeric, optional) The maximum amount of answers a block can vote for.\n"
+                "4. range            (bool, optional) The consultation answers are exclusively in the range min-max.\n"
+                "5. fee              (numeric, optional) Contribution to the fund used as fee.\n"
+                "6. dump_raw         (bool, optional) Dump the raw transaction instead of sending. Default: false\n"
+                "\nResult:\n"
+                "\"{ hash: consultation_id,\"            (string) The consultation id.\n"
+                "\"  strDZeel: string }\"            (string) The attached strdzeel property.\n"
+                "\nExamples:\n"
+                + HelpExampleCli("createconsultation", "\"Who should be the CEO of Navcoin? /s\" 1 1")
+                + HelpExampleCli("createconsultation", "\"How much should Navcoin's CEO earn per month? /s\" 1000 5000 true")
         );
 
     CNavcoinAddress address("NQFqqMUD55ZV3PJEJZtaKCsQmjLT6JkjvJ"); // Dummy address
@@ -1321,21 +1321,21 @@ UniValue createconsultationwithanswers(const UniValue& params, bool fHelp)
 
     if (fHelp || params.size() < 2)
         throw runtime_error(
-            "createconsultationwithanswers \"question\" \"[answers]\" ( maxanswers admitsanswerproposals fee dump_raw )\n"
-            "\nCreates a consultation for the DAO. Min fee of " + FormatMoney(GetConsensusParameter(Consensus::CONSENSUS_PARAM_CONSULTATION_MIN_FEE, view)) + "NAV is required.\n"
-            + HelpRequiringPassphrase() +
-            "\nArguments:\n"
-            "1. \"question\"            (string, required) The question of the new consultation.\n"
-            "2.  \"[answers]\"          (array of strings, required) An array of strings with the proposed answers.\n"
-            "3. maxanswers            (numeric, optional) The maximum amount of answers a block can vote for at the same time.\n"
-            "4. admitsanswerproposals (bool, optional) Stakers are allowed to propose new answers.\n"
-            "5. fee                   (numeric, optional) Contribution to the fund used as fee.\n"
-            "6. dump_raw              (bool, optional) Dump the raw transaction instead of sending. Default: false\n"
-            "\nResult:\n"
-            "\"{ hash: consultation_id,\"            (string) The consultation id.\n"
-            "\"  strDZeel: string }\"            (string) The attached strdzeel property.\n"
-            "\nExamples:\n"
-            + HelpExampleCli("createconsultationwithanswers", "\"Who should be the CEO of Navcoin? /s\" \"[\\\"Craig Wright\\\",\\\"Loomdart\\\"]\"")
+                "createconsultationwithanswers \"question\" \"[answers]\" ( maxanswers admitsanswerproposals fee dump_raw )\n"
+                "\nCreates a consultation for the DAO. Min fee of " + FormatMoney(GetConsensusParameter(Consensus::CONSENSUS_PARAM_CONSULTATION_MIN_FEE, view)) + "NAV is required.\n"
+                + HelpRequiringPassphrase() +
+                "\nArguments:\n"
+                "1. \"question\"            (string, required) The question of the new consultation.\n"
+                "2.  \"[answers]\"          (array of strings, required) An array of strings with the proposed answers.\n"
+                "3. maxanswers            (numeric, optional) The maximum amount of answers a block can vote for at the same time.\n"
+                "4. admitsanswerproposals (bool, optional) Stakers are allowed to propose new answers.\n"
+                "5. fee                   (numeric, optional) Contribution to the fund used as fee.\n"
+                "6. dump_raw              (bool, optional) Dump the raw transaction instead of sending. Default: false\n"
+                "\nResult:\n"
+                "\"{ hash: consultation_id,\"            (string) The consultation id.\n"
+                "\"  strDZeel: string }\"            (string) The attached strdzeel property.\n"
+                "\nExamples:\n"
+                + HelpExampleCli("createconsultationwithanswers", "\"Who should be the CEO of Navcoin? /s\" \"[\\\"Craig Wright\\\",\\\"Loomdart\\\"]\"")
         );
 
     CNavcoinAddress address("NQFqqMUD55ZV3PJEJZtaKCsQmjLT6JkjvJ"); // Dummy address
@@ -1411,16 +1411,16 @@ std::string random_string( size_t length )
 {
     auto randchar = []() -> char
     {
-            const char charset[] =
-            "0123456789"
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-            "abcdefghijklmnopqrstuvwxyz";
-            const size_t max_index = (sizeof(charset) - 1);
-            return charset[ rand() % max_index ];
-};
-std::string str(length,0);
-std::generate_n( str.begin(), length, randchar );
-return str;
+        const char charset[] =
+                "0123456789"
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                "abcdefghijklmnopqrstuvwxyz";
+        const size_t max_index = (sizeof(charset) - 1);
+        return charset[ rand() % max_index ];
+    };
+    std::string str(length,0);
+    std::generate_n( str.begin(), length, randchar );
+    return str;
 }
 
 UniValue createpaymentrequest(const UniValue& params, bool fHelp)
@@ -1430,19 +1430,19 @@ UniValue createpaymentrequest(const UniValue& params, bool fHelp)
 
     if (fHelp || params.size() < 3)
         throw runtime_error(
-            "createpaymentrequest \"hash\" \"amount\" \"id\" ( fee dump_raw )\n"
-            "\nCreates a proposal to withdraw funds from the community fund. Fee: 0.0001 NAV\n"
-            + HelpRequiringPassphrase() +
-            "\nArguments:\n"
-            "1. \"hash\"               (string, required) The hash of the proposal from which you want to withdraw funds. It must be approved.\n"
-            "2. \"amount\"             (numeric or string, required) The amount in " + CURRENCY_UNIT + " to withdraw. eg 10\n"
-            "3. \"id\"                 (string, required) Unique id to identify the payment request\n"
-            "4. dump_raw               (bool, optional) Dump the raw transaction instead of sending. Default: false\n"
-            "\nResult:\n"
-            "\"{ hash: prequestid,\"             (string) The payment request id.\n"
-            "\"  strDZeel: string }\"            (string) The attached strdzeel property.\n"
-            "\nExamples:\n"
-            + HelpExampleCli("createpaymentrequest", "\"196a4c2115d3c1c1dce1156eb2404ad77f3c5e9f668882c60cb98d638313dbd3\" 1000 \"Invoice March 2017\"")
+                "createpaymentrequest \"hash\" \"amount\" \"id\" ( fee dump_raw )\n"
+                "\nCreates a proposal to withdraw funds from the community fund. Fee: 0.0001 NAV\n"
+                + HelpRequiringPassphrase() +
+                "\nArguments:\n"
+                "1. \"hash\"               (string, required) The hash of the proposal from which you want to withdraw funds. It must be approved.\n"
+                "2. \"amount\"             (numeric or string, required) The amount in " + CURRENCY_UNIT + " to withdraw. eg 10\n"
+                                                                                                           "3. \"id\"                 (string, required) Unique id to identify the payment request\n"
+                                                                                                           "4. dump_raw               (bool, optional) Dump the raw transaction instead of sending. Default: false\n"
+                                                                                                           "\nResult:\n"
+                                                                                                           "\"{ hash: prequestid,\"             (string) The payment request id.\n"
+                                                                                                           "\"  strDZeel: string }\"            (string) The attached strdzeel property.\n"
+                                                                                                           "\nExamples:\n"
+                + HelpExampleCli("createpaymentrequest", "\"196a4c2115d3c1c1dce1156eb2404ad77f3c5e9f668882c60cb98d638313dbd3\" 1000 \"Invoice March 2017\"")
         );
 
     if (!Params().GetConsensus().fDaoClientActivated)
@@ -1487,8 +1487,8 @@ UniValue createpaymentrequest(const UniValue& params, bool fHelp)
     std::string sRandom = random_string(16);
 
     std::string Secret = sRandom + "I kindly ask to withdraw " +
-            std::to_string(nReqAmount) + "NAV from the proposal " +
-            proposal.hash.ToString() + ". Payment request id: " + id;
+                         std::to_string(nReqAmount) + "NAV from the proposal " +
+                         proposal.hash.ToString() + ". Payment request id: " + id;
 
     CHashWriter ss(SER_GETHASH, 0);
     ss << strMessageMagic;
@@ -1563,22 +1563,22 @@ UniValue proposeanswer(const UniValue& params, bool fHelp)
 
     if (fHelp || params.size() < 2)
         throw runtime_error(
-            "proposeanswer \"hash\" \"answer\" ( fee dump_raw )\n"
-            "\nProposes an answer for an already existing consultation of the DAO. Min fee of " + FormatMoney(GetConsensusParameter(Consensus::CONSENSUS_PARAM_CONSULTATION_ANSWER_MIN_FEE, view)) + "NAV is required.\n"
-            + HelpRequiringPassphrase() +
-            "\nArguments:\n"
-            "1. \"hash\"         (string, required) The hash of the already existing consultation.\n"
-            "2. \"answer\"       (string, required) The proposed answer.\n"
-            "3. fee              (numeric, optional) Contribution to the fund used as fee.\n"
-            "4. dump_raw         (bool, optional) Dump the raw transaction instead of sending. Default: false\n"
-            "\nResult:\n"
-            "\"{ hash: consultation_id,\"        (string) The consultation id.\n"
-            "\"  strDZeel: string }\"            (string) The attached strdzeel property.\n"
-            "\nExamples:\n"
-            + HelpExampleCli("proposeanswer", "\"196a4c2115d3c1c1dce1156eb2404ad77f3c5e9f668882c60cb98d638313dbd3\" \"Vitalik Buterin\"")
-            + HelpExampleCli("proposeanswer", "\"196a4c2115d3c1c1dce1156eb2404ad77f3c5e9f668882c60cb98d638313dbd3\" \"Satoshi Nakamoto\"")
-            + HelpExampleCli("proposeanswer", "\"196a4c2115d3c1c1dce1156eb2404ad77f3c5e9f668882c60cb98d638313dbd3\" \"Charlie Lee\"")
-            + HelpExampleCli("proposeanswer", "\"196a4c2115d3c1c1dce1156eb2404ad77f3c5e9f668882c60cb98d638313dbd3\" \"Riccardo Fluffypony\"")
+                "proposeanswer \"hash\" \"answer\" ( fee dump_raw )\n"
+                "\nProposes an answer for an already existing consultation of the DAO. Min fee of " + FormatMoney(GetConsensusParameter(Consensus::CONSENSUS_PARAM_CONSULTATION_ANSWER_MIN_FEE, view)) + "NAV is required.\n"
+                + HelpRequiringPassphrase() +
+                "\nArguments:\n"
+                "1. \"hash\"         (string, required) The hash of the already existing consultation.\n"
+                "2. \"answer\"       (string, required) The proposed answer.\n"
+                "3. fee              (numeric, optional) Contribution to the fund used as fee.\n"
+                "4. dump_raw         (bool, optional) Dump the raw transaction instead of sending. Default: false\n"
+                "\nResult:\n"
+                "\"{ hash: consultation_id,\"        (string) The consultation id.\n"
+                "\"  strDZeel: string }\"            (string) The attached strdzeel property.\n"
+                "\nExamples:\n"
+                + HelpExampleCli("proposeanswer", "\"196a4c2115d3c1c1dce1156eb2404ad77f3c5e9f668882c60cb98d638313dbd3\" \"Vitalik Buterin\"")
+                + HelpExampleCli("proposeanswer", "\"196a4c2115d3c1c1dce1156eb2404ad77f3c5e9f668882c60cb98d638313dbd3\" \"Satoshi Nakamoto\"")
+                + HelpExampleCli("proposeanswer", "\"196a4c2115d3c1c1dce1156eb2404ad77f3c5e9f668882c60cb98d638313dbd3\" \"Charlie Lee\"")
+                + HelpExampleCli("proposeanswer", "\"196a4c2115d3c1c1dce1156eb2404ad77f3c5e9f668882c60cb98d638313dbd3\" \"Riccardo Fluffypony\"")
         );
 
     CNavcoinAddress address("NQFqqMUD55ZV3PJEJZtaKCsQmjLT6JkjvJ"); // Dummy address
@@ -1678,7 +1678,7 @@ UniValue donatefund(const UniValue& params, bool fHelp)
                 + HelpExampleCli("donatefund", "0.1")
                 + HelpExampleCli("donatefund", "0.1 true")
 
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -1727,7 +1727,7 @@ UniValue listaddressgroupings(const UniValue& params, bool fHelp)
                                                                                            "\nExamples:\n"
                 + HelpExampleCli("listaddressgroupings", "")
                 + HelpExampleRpc("listaddressgroupings", "")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -1776,7 +1776,7 @@ UniValue signmessage(const UniValue& params, bool fHelp)
                 + HelpExampleCli("verifymessage", "\"1D1ZrZNe3JUo7ZycKEYQQiQAWd9y54F4XZ\" \"signature\" \"my message\"") +
                 "\nAs json rpc\n"
                 + HelpExampleRpc("signmessage", "\"1D1ZrZNe3JUo7ZycKEYQQiQAWd9y54F4XZ\", \"my message\"")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -1831,7 +1831,7 @@ UniValue getreceivedbyaddress(const UniValue& params, bool fHelp)
                 + HelpExampleCli("getreceivedbyaddress", "\"1D1ZrZNe3JUo7ZycKEYQQiQAWd9y54F4XZ\" 6") +
                 "\nAs a json rpc call\n"
                 + HelpExampleRpc("getreceivedbyaddress", "\"1D1ZrZNe3JUo7ZycKEYQQiQAWd9y54F4XZ\", 6")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -1889,7 +1889,7 @@ UniValue getreceivedbyaccount(const UniValue& params, bool fHelp)
                 + HelpExampleCli("getreceivedbyaccount", "\"tabby\" 6") +
                 "\nAs a json rpc call\n"
                 + HelpExampleRpc("getreceivedbyaccount", "\"tabby\", 6")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -1948,7 +1948,7 @@ UniValue getbalance(const UniValue& params, bool fHelp)
                 + HelpExampleCli("getbalance", "\"*\" 6") +
                 "\nAs a json rpc call\n"
                 + HelpExampleRpc("getbalance", "\"*\", 6")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -2040,7 +2040,7 @@ UniValue movecmd(const UniValue& params, bool fHelp)
                 + HelpExampleCli("move", "\"timotei\" \"akiko\" 0.01 6 \"happy birthday!\"") +
                 "\nAs a json rpc call\n"
                 + HelpExampleRpc("move", "\"timotei\", \"akiko\", 0.01, 6, \"happy birthday!\"")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -2092,7 +2092,7 @@ UniValue sendfrom(const UniValue& params, bool fHelp)
                 + HelpExampleCli("sendfrom", "\"tabby\" \"1M72Sfpbz1BPpXFHz9m3CdqATR44Jvaydd\" 0.01 6 \"donation\" \"seans outpost\"") +
                 "\nAs a json rpc call\n"
                 + HelpExampleRpc("sendfrom", "\"tabby\", \"1M72Sfpbz1BPpXFHz9m3CdqATR44Jvaydd\", 0.01, 6, \"donation\", \"seans outpost\"")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -2166,7 +2166,7 @@ UniValue sendmany(const UniValue& params, bool fHelp)
                 + HelpExampleCli("sendmany", "\"\" \"{\\\"1D1ZrZNe3JUo7ZycKEYQQiQAWd9y54F4XZ\\\":0.01,\\\"1353tsE8YMTA4EuV7dgUXGjNFf9KpVvKHz\\\":0.02}\" 1 \"\" \"[\\\"1D1ZrZNe3JUo7ZycKEYQQiQAWd9y54F4XZ\\\",\\\"1353tsE8YMTA4EuV7dgUXGjNFf9KpVvKHz\\\"]\"") +
                 "\nAs a json rpc call\n"
                 + HelpExampleRpc("sendmany", "\"\", \"{\\\"1D1ZrZNe3JUo7ZycKEYQQiQAWd9y54F4XZ\\\":0.01,\\\"1353tsE8YMTA4EuV7dgUXGjNFf9KpVvKHz\\\":0.02}\", 6, \"testing\"")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -2287,7 +2287,7 @@ UniValue getnewprivateaddress(const UniValue& params, bool fHelp)
                 "\nExamples:\n"
                 + HelpExampleCli("getnewprivateaddress", "")
                 + HelpExampleRpc("getnewprivateaddress", "")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -2348,10 +2348,10 @@ UniValue addmultisigaddress(const UniValue& params, bool fHelp)
 
                      "\nExamples:\n"
                      "\nAdd a multisig address from 2 addresses\n"
-                + HelpExampleCli("addmultisigaddress", "2 \"[\\\"16sSauSf5pF2UkUwvKGq4qjNRzBZYqgEL5\\\",\\\"171sgjn4YtPu27adkKGrdDwzRTxnRkBfKV\\\"]\"") +
-                "\nAs json rpc call\n"
-                + HelpExampleRpc("addmultisigaddress", "2, \"[\\\"16sSauSf5pF2UkUwvKGq4qjNRzBZYqgEL5\\\",\\\"171sgjn4YtPu27adkKGrdDwzRTxnRkBfKV\\\"]\"")
-                ;
+                     + HelpExampleCli("addmultisigaddress", "2 \"[\\\"16sSauSf5pF2UkUwvKGq4qjNRzBZYqgEL5\\\",\\\"171sgjn4YtPu27adkKGrdDwzRTxnRkBfKV\\\"]\"") +
+                     "\nAs json rpc call\n"
+                     + HelpExampleRpc("addmultisigaddress", "2, \"[\\\"16sSauSf5pF2UkUwvKGq4qjNRzBZYqgEL5\\\",\\\"171sgjn4YtPu27adkKGrdDwzRTxnRkBfKV\\\"]\"")
+        ;
         throw runtime_error(msg);
     }
 
@@ -2431,7 +2431,7 @@ UniValue addwitnessaddress(const UniValue& params, bool fHelp)
                      "\nResult:\n"
                      "\"witnessaddress\",  (string) The value of the new address (P2SH of witness script).\n"
                      "}\n"
-                ;
+        ;
         throw runtime_error(msg);
     }
 
@@ -2628,7 +2628,7 @@ UniValue listreceivedbyaddress(const UniValue& params, bool fHelp)
                 + HelpExampleCli("listreceivedbyaddress", "")
                 + HelpExampleCli("listreceivedbyaddress", "6 true")
                 + HelpExampleRpc("listreceivedbyaddress", "6, true, true")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -2665,7 +2665,7 @@ UniValue listreceivedbyaccount(const UniValue& params, bool fHelp)
                 + HelpExampleCli("listreceivedbyaccount", "")
                 + HelpExampleCli("listreceivedbyaccount", "6 true")
                 + HelpExampleRpc("listreceivedbyaccount", "6, true, true")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -2708,9 +2708,9 @@ void GetReceived(const COutputEntry& r, const CWalletTx& wtx, const string& strA
         entry.pushKV("amount", ValueFromAmount(r.amount));
 
         entry.pushKV("canStake", (::IsMine(*pwalletMain, r.destination) & ISMINE_STAKABLE ||
-                                          (::IsMine(*pwalletMain, r.destination) & ISMINE_SPENDABLE &&
-                                           !CNavcoinAddress(r.destination).IsColdStakingAddress(Params()) &&
-                                           !CNavcoinAddress(r.destination).IsColdStakingv2Address(Params()))) ? true : false);
+                                  (::IsMine(*pwalletMain, r.destination) & ISMINE_SPENDABLE &&
+                                   !CNavcoinAddress(r.destination).IsColdStakingAddress(Params()) &&
+                                   !CNavcoinAddress(r.destination).IsColdStakingv2Address(Params()))) ? true : false);
         entry.pushKV("canSpend", ((::IsMine(*pwalletMain, r.destination) & ISMINE_SPENDABLE) || (pwalletMain->IsMine(wtx.vout[r.vout]) & ISMINE_SPENDABLE_PRIVATE)) ? true : false);
         if (pwalletMain->mapAddressBook.count(r.destination))
             entry.pushKV("label", account);
@@ -2854,7 +2854,7 @@ UniValue listtransactions(const UniValue& params, bool fHelp)
                 + HelpExampleCli("listtransactions", "\"*\" 20 100") +
                 "\nAs a json rpc call\n"
                 + HelpExampleRpc("listtransactions", "\"*\", 20, 100")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -2948,7 +2948,7 @@ UniValue listaccounts(const UniValue& params, bool fHelp)
                 + HelpExampleCli("listaccounts", "6") +
                 "\nAs json rpc call\n"
                 + HelpExampleRpc("listaccounts", "6")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -3041,7 +3041,7 @@ UniValue listsinceblock(const UniValue& params, bool fHelp)
                 + HelpExampleCli("listsinceblock", "")
                 + HelpExampleCli("listsinceblock", "\"000000000000000bacf66f7497b7dc45ef753ee9a7d38571037cdb1a57f663ad\" 6")
                 + HelpExampleRpc("listsinceblock", "\"000000000000000bacf66f7497b7dc45ef753ee9a7d38571037cdb1a57f663ad\", 6")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -3135,7 +3135,7 @@ UniValue gettransaction(const UniValue& params, bool fHelp)
                 + HelpExampleCli("gettransaction", "\"1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d\"")
                 + HelpExampleCli("gettransaction", "\"1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d\" true")
                 + HelpExampleRpc("gettransaction", "\"1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d\"")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -3195,7 +3195,7 @@ UniValue abandontransaction(const UniValue& params, bool fHelp)
                 "\nExamples:\n"
                 + HelpExampleCli("abandontransaction", "\"1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d\"")
                 + HelpExampleRpc("abandontransaction", "\"1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d\"")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -3225,7 +3225,7 @@ UniValue backupwallet(const UniValue& params, bool fHelp)
                 "\nExamples:\n"
                 + HelpExampleCli("backupwallet", "\"backup.dat\"")
                 + HelpExampleRpc("backupwallet", "\"backup.dat\"")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -3252,7 +3252,7 @@ UniValue keypoolrefill(const UniValue& params, bool fHelp)
                                               "\nExamples:\n"
                 + HelpExampleCli("keypoolrefill", "")
                 + HelpExampleRpc("keypoolrefill", "")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -3308,7 +3308,7 @@ UniValue walletpassphrase(const UniValue& params, bool fHelp)
                 + HelpExampleCli("walletlock", "") +
                 "\nAs json rpc call\n"
                 + HelpExampleRpc("walletpassphrase", "\"my pass phrase\", 60")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -3368,7 +3368,7 @@ UniValue walletpassphrasechange(const UniValue& params, bool fHelp)
                 "\nExamples:\n"
                 + HelpExampleCli("walletpassphrasechange", "\"old one\" \"new one\"")
                 + HelpExampleRpc("walletpassphrasechange", "\"old one\", \"new one\"")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -3419,7 +3419,7 @@ UniValue walletlock(const UniValue& params, bool fHelp)
                 + HelpExampleCli("walletlock", "") +
                 "\nAs json rpc call\n"
                 + HelpExampleRpc("walletlock", "")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -3465,7 +3465,7 @@ UniValue encryptwallet(const UniValue& params, bool fHelp)
                 + HelpExampleCli("walletlock", "") +
                 "\nAs a json rpc call\n"
                 + HelpExampleRpc("encryptwallet", "\"my pass phrase\"")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -3502,18 +3502,18 @@ UniValue encrypttxdata(const UniValue& params, bool fHelp)
 
     if (fHelp || params.size() != 1)
         throw runtime_error(
-            "encrypttxdata \"passphrase\"\n"
-            "\nEncrypts the wallet database using \"passphrase\", effectively encrypting your\n"
-            "transaction data and addressbook, you can also use this rpc command to change the\n"
-            "encryption \"passphrase\" of an already encrypted wallet database.\n"
-            "Note that this will shutdown the server.\n"
-            "\nArguments:\n"
-            "1. \"passphrase\"    (string) The pass phrase to encrypt the wallet database with. It must be at least 1 character, but should be long.\n"
-            "\nExamples:\n"
-            "\nEncrypt you wallet\n"
-            + HelpExampleCli("encrypttxdata", "\"my pass phrase\"") +
-            "\nAs a json rpc call\n"
-            + HelpExampleRpc("encrypttxdata", "\"my pass phrase\"")
+                "encrypttxdata \"passphrase\"\n"
+                "\nEncrypts the wallet database using \"passphrase\", effectively encrypting your\n"
+                "transaction data and addressbook, you can also use this rpc command to change the\n"
+                "encryption \"passphrase\" of an already encrypted wallet database.\n"
+                "Note that this will shutdown the server.\n"
+                "\nArguments:\n"
+                "1. \"passphrase\"    (string) The pass phrase to encrypt the wallet database with. It must be at least 1 character, but should be long.\n"
+                "\nExamples:\n"
+                "\nEncrypt you wallet\n"
+                + HelpExampleCli("encrypttxdata", "\"my pass phrase\"") +
+                "\nAs a json rpc call\n"
+                + HelpExampleRpc("encrypttxdata", "\"my pass phrase\"")
         );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
@@ -3529,8 +3529,8 @@ UniValue encrypttxdata(const UniValue& params, bool fHelp)
 
     if (strWalletPass.length() < 1)
         throw runtime_error(
-            "encrypttxdata <passphrase>\n"
-            "Encrypts the txdata with <passphrase>.");
+                "encrypttxdata <passphrase>\n"
+                "Encrypts the txdata with <passphrase>.");
 
     if (!pwalletMain->EncryptTx(strWalletPass))
         throw JSONRPCError(RPC_TXDATA_ENCRYPTION_FAILED, "Error: Failed to encrypt the txdata.");
@@ -3581,7 +3581,7 @@ UniValue lockunspent(const UniValue& params, bool fHelp)
                 + HelpExampleCli("lockunspent", "true \"[{\\\"txid\\\":\\\"a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0\\\",\\\"vout\\\":1}]\"") +
                 "\nAs a json rpc call\n"
                 + HelpExampleRpc("lockunspent", "false, \"[{\\\"txid\\\":\\\"a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0\\\",\\\"vout\\\":1}]\"")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -3606,9 +3606,9 @@ UniValue lockunspent(const UniValue& params, bool fHelp)
         const UniValue& o = output.get_obj();
 
         RPCTypeCheckObj(o,
-        {
-                            {"txid", UniValueType(UniValue::VSTR)},
-                            {"vout", UniValueType(UniValue::VNUM)},
+                        {
+                                {"txid", UniValueType(UniValue::VSTR)},
+                                {"vout", UniValueType(UniValue::VNUM)},
                         });
 
         string txid = find_value(o, "txid").get_str();
@@ -3659,7 +3659,7 @@ UniValue listlockunspent(const UniValue& params, bool fHelp)
                 + HelpExampleCli("lockunspent", "true \"[{\\\"txid\\\":\\\"a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0\\\",\\\"vout\\\":1}]\"") +
                 "\nAs a json rpc call\n"
                 + HelpExampleRpc("listlockunspent", "")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -3695,7 +3695,7 @@ UniValue settxfee(const UniValue& params, bool fHelp)
                                                                                                             "\nExamples:\n"
                 + HelpExampleCli("settxfee", "0.00001")
                 + HelpExampleRpc("settxfee", "0.00001")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -3719,21 +3719,21 @@ UniValue getwalletinfo(const UniValue& params, bool fHelp)
                 "{\n"
                 "  \"walletversion\": xxxxx,       (numeric) the wallet version\n"
                 "  \"balance\": xxxxxxx,           (numeric) the total confirmed balance of the wallet in " + CURRENCY_UNIT + "\n"
-                "  \"unconfirmed_balance\": xxx,   (numeric) the total unconfirmed balance of the wallet in " + CURRENCY_UNIT + "\n"		             "  \"private_balance\": xxx,       (numeric) the total confirmed private balance of the wallet in " + CURRENCY_UNIT + "\n"
-                "  \"unconfirmed_balance\": xxx,   (numeric) the total unconfirmed balance of the wallet in " + CURRENCY_UNIT + "\n"
-                "  \"immature_balance\": xxxxxx,   (numeric) the total immature balance of the wallet in " + CURRENCY_UNIT + "\n"
-                "  \"txcount\": xxxxxxx,           (numeric) the total number of transactions in the wallet\n"
-                "  \"keypoololdest\": xxxxxx,      (numeric) the timestamp (seconds since GMT epoch) of the oldest pre-generated key in the key pool\n"
-                "  \"keypoolsize\": xxxx,          (numeric) how many new keys are pre-generated\n"
-                "  \"unlocked_until\": ttt,        (numeric) the timestamp in seconds since epoch (midnight Jan 1 1970 GMT) that the wallet is unlocked for transfers, or 0 if the wallet is locked\n"
-                "  \"unlocked_for_staking\": b,    (boolean) whether the wallet is unlocked just for staking and mixing or not\n"
-                "  \"paytxfee\": x.xxxx,           (numeric) the transaction fee configuration, set in " + CURRENCY_UNIT + "/kB\n"
-                "  \"hdmasterkeyid\": \"<hash160>\", (string) the Hash160 of the HD master pubkey\n"
-                "}\n"
-                "\nExamples:\n"
+                                                                                                                              "  \"unconfirmed_balance\": xxx,   (numeric) the total unconfirmed balance of the wallet in " + CURRENCY_UNIT + "\n"		             "  \"private_balance\": xxx,       (numeric) the total confirmed private balance of the wallet in " + CURRENCY_UNIT + "\n"
+                                                                                                                                                                                                                                                                                                                                                                                             "  \"unconfirmed_balance\": xxx,   (numeric) the total unconfirmed balance of the wallet in " + CURRENCY_UNIT + "\n"
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             "  \"immature_balance\": xxxxxx,   (numeric) the total immature balance of the wallet in " + CURRENCY_UNIT + "\n"
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          "  \"txcount\": xxxxxxx,           (numeric) the total number of transactions in the wallet\n"
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          "  \"keypoololdest\": xxxxxx,      (numeric) the timestamp (seconds since GMT epoch) of the oldest pre-generated key in the key pool\n"
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          "  \"keypoolsize\": xxxx,          (numeric) how many new keys are pre-generated\n"
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          "  \"unlocked_until\": ttt,        (numeric) the timestamp in seconds since epoch (midnight Jan 1 1970 GMT) that the wallet is unlocked for transfers, or 0 if the wallet is locked\n"
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          "  \"unlocked_for_staking\": b,    (boolean) whether the wallet is unlocked just for staking and mixing or not\n"
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          "  \"paytxfee\": x.xxxx,           (numeric) the transaction fee configuration, set in " + CURRENCY_UNIT + "/kB\n"
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     "  \"hdmasterkeyid\": \"<hash160>\", (string) the Hash160 of the HD master pubkey\n"
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     "}\n"
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     "\nExamples:\n"
                 + HelpExampleCli("getwalletinfo", "")
                 + HelpExampleRpc("getwalletinfo", "")
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -3771,7 +3771,7 @@ UniValue resendwallettransactions(const UniValue& params, bool fHelp)
                 "Intended only for testing; the wallet code periodically re-broadcasts\n"
                 "automatically.\n"
                 "Returns array of transaction ids that were re-broadcast.\n"
-                );
+        );
 
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
@@ -3824,7 +3824,7 @@ UniValue listunspent(const UniValue& params, bool fHelp)
                 + HelpExampleCli("listunspent", "")
                 + HelpExampleCli("listunspent", "6 9999999 \"[\\\"1PGFqEzfmQch1gKD3ra4k18PNj3tTUUSqg\\\",\\\"1LtvqCaApEdUGFkpKMM4MstjcaL4dKg8SP\\\"]\"")
                 + HelpExampleRpc("listunspent", "6, 9999999 \"[\\\"1PGFqEzfmQch1gKD3ra4k18PNj3tTUUSqg\\\",\\\"1LtvqCaApEdUGFkpKMM4MstjcaL4dKg8SP\\\"]\"")
-                );
+        );
 
     RPCTypeCheck(params, boost::assign::list_of(UniValue::VNUM)(UniValue::VNUM)(UniValue::VARR));
 
@@ -3940,7 +3940,7 @@ UniValue fundrawtransaction(const UniValue& params, bool fHelp)
                 + HelpExampleCli("signrawtransaction", "\"fundedtransactionhex\"") +
                 "\nSend the transaction\n"
                 + HelpExampleCli("sendrawtransaction", "\"signedtransactionhex\"")
-                );
+        );
 
     RPCTypeCheck(params, boost::assign::list_of(UniValue::VSTR));
 
@@ -3963,13 +3963,13 @@ UniValue fundrawtransaction(const UniValue& params, bool fHelp)
             UniValue options = params[1];
 
             RPCTypeCheckObj(options,
-            {
-                                {"changeAddress", UniValueType(UniValue::VSTR)},
-                                {"changePosition", UniValueType(UniValue::VNUM)},
-                                {"includeWatching", UniValueType(UniValue::VBOOL)},
-                                {"lockUnspents", UniValueType(UniValue::VBOOL)},
-                                {"private", UniValueType(UniValue::VBOOL)},
-                                {"feeRate", UniValueType()}, // will be checked below
+                            {
+                                    {"changeAddress", UniValueType(UniValue::VSTR)},
+                                    {"changePosition", UniValueType(UniValue::VNUM)},
+                                    {"includeWatching", UniValueType(UniValue::VBOOL)},
+                                    {"lockUnspents", UniValueType(UniValue::VBOOL)},
+                                    {"private", UniValueType(UniValue::VBOOL)},
+                                    {"feeRate", UniValueType()}, // will be checked below
                             },
                             true, true);
 
@@ -4031,15 +4031,15 @@ UniValue fundrawtransaction(const UniValue& params, bool fHelp)
 // ///////////////////////////////////////////////////////////////////// ** em52
 //  new rpc added by Remy5
 
-struct StakePeriodRange_T {
+struct StakeRange {
     int64_t Start;
     int64_t End;
     int64_t Total;
     int Count;
-    std::string Name;
+    string Name;
 };
 
-typedef std::vector<StakePeriodRange_T> vStakePeriodRange_T;
+typedef vector<StakeRange> vStakeRange;
 
 // Check if we have a Tx that can be counted in staking report
 bool IsTxCountedAsStaked(const CWalletTx* tx)
@@ -4065,7 +4065,7 @@ CAmount GetTxStakeAmount(const CWalletTx* tx)
     // use the cached amount if available
     if ((tx->fCreditCached || tx->fColdStakingCreditCached) && (tx->fDebitCached || tx->fColdStakingDebitCached))
         return tx->nCreditCached + tx->nColdStakingCreditCached - tx->nDebitCached - tx->nColdStakingDebitCached;
-    // Check for cold staking
+        // Check for cold staking
     else if (tx->vout[1].scriptPubKey.IsColdStaking() || tx->vout[1].scriptPubKey.IsColdStakingv2())
         return tx->GetCredit(pwalletMain->IsMine(tx->vout[1])) - tx->GetDebit(pwalletMain->IsMine(tx->vout[1]));
 
@@ -4101,9 +4101,9 @@ int64_t GetFirstStakeTime()
 
 // **em52: Get total coins staked on given period
 // inspired from CWallet::GetStake()
-// Parameter aRange = Vector with given limit date, and result
+// Parameter vRange = Vector with given limit date, and result
 // return int =  Number of Wallet's elements analyzed
-int GetsStakeSubTotal(vStakePeriodRange_T& aRange)
+int GetsStakeSubTotal(vStakeRange& vRange)
 {
     // Lock cs_main before we try to call GetTxStakeAmount
     LOCK(cs_main);
@@ -4113,7 +4113,7 @@ int GetsStakeSubTotal(vStakePeriodRange_T& aRange)
 
     const CWalletTx* pcoin;
 
-    vStakePeriodRange_T::iterator vIt;
+    vStakeRange::iterator vIt;
 
     // scan the entire wallet transactions
     for (map<uint256, CWalletTx>::const_iterator it = pwalletMain->mapWallet.begin();
@@ -4132,7 +4132,7 @@ int GetsStakeSubTotal(vStakePeriodRange_T& aRange)
         nAmount = GetTxStakeAmount(pcoin);
 
         // scan the range
-        for(vIt=aRange.begin(); vIt != aRange.end(); vIt++)
+        for(vIt=vRange.begin(); vIt != vRange.end(); vIt++)
         {
             if (pcoin->nTime >= vIt->Start)
             {
@@ -4154,11 +4154,10 @@ int GetsStakeSubTotal(vStakePeriodRange_T& aRange)
 }
 
 // prepare range for stake report
-vStakePeriodRange_T PrepareRangeForStakeReport()
+vStakeRange PrepareRangeForStakeReport(bool fNoDaily = false)
 {
-    vStakePeriodRange_T aRange;
-    StakePeriodRange_T x;
-
+    vStakeRange vRange;
+    StakeRange x;
 
     int64_t n1Hour = 60*60;
     int64_t n1Day = 24 * n1Hour;
@@ -4177,17 +4176,17 @@ vStakePeriodRange_T PrepareRangeForStakeReport()
     x.Count = 0;
     x.Total = 0;
 
-    // prepare last single 30 day Range
-    for(int i=0; i<30; i++)
-    {
+    if (!fNoDaily) {
+        // prepare last single 30 day Range
+        for(int i=0; i<30; i++)
+        {
+            x.Name = DateTimeStrFormat("%Y-%m-%d %H:%M:%S",x.Start);
 
-        x.Name = DateTimeStrFormat("%Y-%m-%d %H:%M:%S",x.Start);
+            vRange.push_back(x);
 
-        aRange.push_back(x);
-
-        x.End    = x.Start - 1;
-        x.Start -= n1Day;
-
+            x.End    = x.Start - 1;
+            x.Start -= n1Day;
+        }
     }
 
     // prepare subtotal range of last 24H, 1 week, 30 days, 1 years
@@ -4202,16 +4201,16 @@ vStakePeriodRange_T PrepareRangeForStakeReport()
         x.End   = nToday - GroupDays[i][1] * n1Day;
         x.Name = "Last " + sGroupName[i];
 
-        aRange.push_back(x);
+        vRange.push_back(x);
     }
 
     // Special case. not a subtotal, but last stake
     x.End  = 0;
     x.Start = 0;
     x.Name = "Latest Stake";
-    aRange.push_back(x);
+    vRange.push_back(x);
 
-    return aRange;
+    return vRange;
 }
 
 
@@ -4223,17 +4222,17 @@ UniValue getstakereport(const UniValue& params, bool fHelp)
                 "getstakereport\n"
                 "List last single 30 day stake subtotal and last 24h, 7, 30, 365 day subtotal.\n");
 
-    vStakePeriodRange_T aRange = PrepareRangeForStakeReport();
+    vStakeRange vRange = PrepareRangeForStakeReport();
 
     LOCK(cs_main);
 
     // get subtotal calc
     int64_t nTook = GetTimeMillis();
-    int nItemCounted = GetsStakeSubTotal(aRange);
+    int nItemCounted = GetsStakeSubTotal(vRange);
 
     UniValue result(UniValue::VOBJ);
 
-    vStakePeriodRange_T::iterator vIt;
+    vStakeRange::iterator vIt;
 
     // Span of days to compute average over
     int nDays = 0;
@@ -4246,7 +4245,7 @@ UniValue getstakereport(const UniValue& params, bool fHelp)
         nWalletDays = (GetTime() - GetFirstStakeTime()) / 86400;
 
     // report it
-    for(vIt = aRange.begin(); vIt != aRange.end(); vIt++)
+    for(vIt = vRange.begin(); vIt != vRange.end(); vIt++)
     {
         // Add it to results
         result.pushKV(vIt->Name, FormatMoney(vIt->Total).c_str());
@@ -4274,7 +4273,7 @@ UniValue getstakereport(const UniValue& params, bool fHelp)
     vIt--;
     result.pushKV("Latest Time",
                   vIt->Start ? DateTimeStrFormat("%Y-%m-%d %H:%M:%S",vIt->Start).c_str() :
-                               "Never");
+                  "Never");
 
     // Moved nTook call down here to be more accurate
     nTook = GetTimeMillis() - nTook;
@@ -4303,7 +4302,7 @@ UniValue resolveopenalias(const UniValue& params, bool fHelp)
                 "\nExamples:\n"
                 "\nGet information about an OpenAlias address\n"
                 + HelpExampleCli("resolveopenalias", "\"donate@navcoin.org\"")
-                );
+        );
 
     std::string address = params[0].get_str();
 
@@ -4339,7 +4338,7 @@ UniValue proposalvotelist(const UniValue& params, bool fHelp)
                 "      \"abs\":   List of proposals this wallet is casting an 'abstain' vote for.\n"
                 "      \"null\":  List of proposals this wallet has NOT yet cast a vote for.\n"
                 "}\n"
-                );
+        );
 
     LOCK(cs_main);
 
@@ -4395,11 +4394,11 @@ UniValue support(const UniValue& params, bool fHelp)
 {
     if (fHelp || params.size() < 1)
         throw runtime_error(
-            "support \"hash\" ( add )\n"
-            "\nShows support for the consultation or consultation answer identified by \"hash\".\n"
-            "\nArguments:\n"
-            "1. \"hash\"          (string, required) The hash\n"
-            "2. \"add\"           (bool, optional) Set to false to remove support (Default: true)\n"
+                "support \"hash\" ( add )\n"
+                "\nShows support for the consultation or consultation answer identified by \"hash\".\n"
+                "\nArguments:\n"
+                "1. \"hash\"          (string, required) The hash\n"
+                "2. \"add\"           (bool, optional) Set to false to remove support (Default: true)\n"
         );
 
     LOCK(cs_main);
@@ -4458,13 +4457,13 @@ UniValue consultationvote(const UniValue& params, bool fHelp)
     if (fHelp || params.size() < 2 ||
         (strCommand != "yes" && strCommand != "value"  && strCommand != "abs" && strCommand != "remove"))
         throw runtime_error(
-            "consultationvote \"hash\" \"yes|value|abs|remove\" ( value )\n"
-            "\nArguments:\n"
-            "1. \"hash\"          (string, required) The consultation/answer hash\n"
-            "2. \"command\"       (string, required) 'yes' to vote yes, 'value' to vote for a range,\n"
-            "                      'abs' to abstain, 'remove' to remove a vote from the list\n"
-            "3. \"value\"         (integer, required) For consultations where the answer is a range,\n"
-            "                      this sets the value to vote for\n"
+                "consultationvote \"hash\" \"yes|value|abs|remove\" ( value )\n"
+                "\nArguments:\n"
+                "1. \"hash\"          (string, required) The consultation/answer hash\n"
+                "2. \"command\"       (string, required) 'yes' to vote yes, 'value' to vote for a range,\n"
+                "                      'abs' to abstain, 'remove' to remove a vote from the list\n"
+                "3. \"value\"         (integer, required) For consultations where the answer is a range,\n"
+                "                      this sets the value to vote for\n"
         );
 
     LOCK(cs_main);
@@ -4649,12 +4648,12 @@ UniValue proposalvote(const UniValue& params, bool fHelp)
     if (fHelp || params.size() > 3 ||
         (strCommand != "yes" && strCommand != "no"  && strCommand != "abs" && strCommand != "remove"))
         throw runtime_error(
-            "proposalvote \"proposal_hash\" \"yes|no|abs|remove\"\n"
-            "\nAdds a proposal to the list of votes.\n"
-            "\nArguments:\n"
-            "1. \"proposal_hash\" (string, required) The proposal hash\n"
-            "2. \"command\"       (string, required) 'yes' to vote yes, 'no' to vote no,\n"
-            "                      'abs' to abstain, 'remove' to remove a proposal from the list\n"
+                "proposalvote \"proposal_hash\" \"yes|no|abs|remove\"\n"
+                "\nAdds a proposal to the list of votes.\n"
+                "\nArguments:\n"
+                "1. \"proposal_hash\" (string, required) The proposal hash\n"
+                "2. \"command\"       (string, required) 'yes' to vote yes, 'no' to vote no,\n"
+                "                      'abs' to abstain, 'remove' to remove a proposal from the list\n"
         );
 
     LOCK(cs_main);
@@ -4720,7 +4719,7 @@ UniValue getstakervote(const UniValue& params, bool fHelp)
                 "          \"val\":      value of the vote\n"
                 "     }\n"
                 "]\n"
-                );
+        );
 
     std::string data = params[0].get_str();
 
@@ -4736,7 +4735,7 @@ UniValue getstakervote(const UniValue& params, bool fHelp)
 
     if (!view.GetCachedVoter(stakerScript, pVoteList))
     {
-         return ret;
+        return ret;
     }
 
     std::map<int, std::map<uint256, int64_t>>* list= pVoteList.GetFullList();
@@ -4773,7 +4772,7 @@ UniValue paymentrequestvotelist(const UniValue& params, bool fHelp)
                 "      \"abs\":   List of proposals this wallet is casting an 'abstain' vote for.\n"
                 "      \"null\":  List of proposals this wallet has NOT yet cast a vote for.\n"
                 "}\n"
-                );
+        );
 
     UniValue ret(UniValue::VOBJ);
     UniValue yesvotes(UniValue::VARR);
@@ -4831,12 +4830,12 @@ UniValue paymentrequestvote(const UniValue& params, bool fHelp)
     if (fHelp || params.size() > 3 ||
         (strCommand != "yes" && strCommand != "no" && strCommand != "abs" && strCommand != "remove"))
         throw runtime_error(
-            "paymentrequestvote \"request_hash\" \"yes|no|abs|remove\"\n"
-            "\nAdds/removes a proposal to the list of votes.\n"
-            "\nArguments:\n"
-            "1. \"request_hash\" (string, required) The payment request hash\n"
-            "2. \"command\"       (string, required) 'yes' to vote yes, 'no' to vote no,\n"
-            "                      'abs' to abstain, 'remove' to remove a proposal from the list\n"
+                "paymentrequestvote \"request_hash\" \"yes|no|abs|remove\"\n"
+                "\nAdds/removes a proposal to the list of votes.\n"
+                "\nArguments:\n"
+                "1. \"request_hash\" (string, required) The payment request hash\n"
+                "2. \"command\"       (string, required) 'yes' to vote yes, 'no' to vote no,\n"
+                "                      'abs' to abstain, 'remove' to remove a proposal from the list\n"
         );
 
     LOCK(cs_main);
@@ -4871,12 +4870,12 @@ UniValue paymentrequestvote(const UniValue& params, bool fHelp)
     }
     else if(strCommand == "remove")
     {
-      bool ret = RemoveVote(strHash);
-      if (ret) {
-        return NullUniValue;
-      } else {
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, string("The payment request is not in the list: ")+strHash);
-      }
+        bool ret = RemoveVote(strHash);
+        if (ret) {
+            return NullUniValue;
+        } else {
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, string("The payment request is not in the list: ")+strHash);
+        }
     }
 
     throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, string("Could not find payment request: ")+strHash);
@@ -4896,7 +4895,7 @@ UniValue listproposals(const UniValue& params, bool fHelp)
                 + HelpExampleCli("listproposal", "mine accepted")
                 + HelpExampleCli("listproposal", "accepted")
                 + HelpExampleRpc("listproposal", "")
-                );
+        );
 
     LOCK(cs_main);
 
@@ -4961,13 +4960,13 @@ UniValue listproposals(const UniValue& params, bool fHelp)
 
 
             if(showAll
-                    || (showMine && fIsMine)
-                    || (showPending  && (fLastState == DAOFlags::NIL || fLastState == DAOFlags::PENDING_VOTING_PREQ
-                                         || fLastState == DAOFlags::PENDING_FUNDS))
-                    || (showAccepted && (fLastState == DAOFlags::ACCEPTED))
-                    || (showAcceptedExpired && (fLastState == DAOFlags::ACCEPTED_EXPIRED))
-                    || (showRejected && (fLastState == DAOFlags::REJECTED))
-                    || (showExpired  &&  proposal.IsExpired(pindexBestHeader->GetBlockTime(), view))) {
+               || (showMine && fIsMine)
+               || (showPending  && (fLastState == DAOFlags::NIL || fLastState == DAOFlags::PENDING_VOTING_PREQ
+                                    || fLastState == DAOFlags::PENDING_FUNDS))
+               || (showAccepted && (fLastState == DAOFlags::ACCEPTED))
+               || (showAcceptedExpired && (fLastState == DAOFlags::ACCEPTED_EXPIRED))
+               || (showRejected && (fLastState == DAOFlags::REJECTED))
+               || (showExpired  &&  proposal.IsExpired(pindexBestHeader->GetBlockTime(), view))) {
                 UniValue o(UniValue::VOBJ);
                 proposal.ToJson(o, view);
                 ret.push_back(o);

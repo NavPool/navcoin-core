@@ -195,12 +195,12 @@ CConsultationMap::const_iterator CStateViewCache::FetchConsultation(const uint25
 
     if (it != cacheConsultations.end())
         return it;
-
+    
     CConsultation tmp;
 
     if (!base->GetConsultation(cid, tmp) || tmp.IsNull())
         return cacheConsultations.end();
-
+    
     CConsultationMap::iterator ret = cacheConsultations.insert(std::make_pair(cid, CConsultation())).first;
     tmp.swap(ret->second);
 

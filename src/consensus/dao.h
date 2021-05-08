@@ -30,11 +30,6 @@ void SetScriptForConsultationSupportRemove(CScript &script, uint256 hash);
 void SetScriptForConsultationVote(CScript &script, uint256 hash, int64_t vote);
 void SetScriptForConsultationVoteRemove(CScript &script, uint256 hash);
 
-void PoolVoteProposal(string strAddress, string strProp, bool vote);
-void PoolRemoveVoteProposal(string strAddress, string strProp);
-void PoolVotePaymentRequest(string strAddress, string strProp, bool vote);
-void PoolRemoveVotePaymentRequest(string strAddress, string strProp);
-
 bool Vote(uint256 hash, int64_t vote, bool &duplicate);
 bool VoteValue(uint256 hash, int64_t vote, bool &duplicate);
 bool RemoveVote(string str);

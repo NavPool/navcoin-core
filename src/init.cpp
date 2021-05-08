@@ -106,13 +106,13 @@ enum BindFlags {
 
 static const char* FEE_ESTIMATES_FILENAME="fee_estimates.dat";
 
-static float fBootstrapProgress = 0.0;
+static int fBootstrapProgress = 0;
 
 static int xferinfo(void *p,
                     curl_off_t dltotal, curl_off_t dlnow,
                     curl_off_t ultotal, curl_off_t ulnow)
 {
-    float fProgress = (float)dlnow/(float)dltotal*100.0f;
+    int fProgress = (float)dlnow/(float)dltotal*100.0f;
     if (fProgress == fBootstrapProgress)
         return 0;
 
@@ -249,9 +249,9 @@ void PrepareShutdown()
     /// Be sure that anything that writes files or flushes caches only does this if the respective
     /// module was initialized.
     RenameThread("navcoin-shutoff");
-    mempool.AddTransactionsUpdated(1, &mempool.cs, &stempool.cs);
+    mempool.AddTransactionsUpdated(1);
     // Changes to mempool should also be made to Dandelion stempool
-    stempool.AddTransactionsUpdated(1, &mempool.cs, &stempool.cs);
+    stempool.AddTransactionsUpdated(1);
 
     StopHTTPRPC();
     StopREST();
@@ -270,7 +270,7 @@ void PrepareShutdown()
         boost::filesystem::path est_path = GetDataDir() / FEE_ESTIMATES_FILENAME;
         CAutoFile est_fileout(fopen(est_path.string().c_str(), "wb"), SER_DISK, CLIENT_VERSION);
         if (!est_fileout.IsNull())
-            mempool.WriteFeeEstimates(est_fileout, &mempool.cs, &stempool.cs);
+            mempool.WriteFeeEstimates(est_fileout);
         else
             LogPrintf("%s: Failed to write fee estimates to %s\n", __func__, est_path.string());
         fFeeEstimatesInitialized = false;
@@ -543,6 +543,11 @@ std::string HelpMessage(HelpMessageMode mode)
                                                             CURRENCY_UNIT));
     strUsage += HelpMessageOpt("-print", _("Send trace/debug info to console instead of debug.log file"));
     strUsage += HelpMessageOpt("-printtoconsole", _("Send trace/debug info to console instead of debug.log file"));
+
+    strUsage += HelpMessageOpt("-blsctmix", _("Turn on/off the blsct mixing threads"));
+    strUsage += HelpMessageOpt("-blsctsleepagg", _("How many milliseconds to rest during blsct aggregation thread loop"));
+    strUsage += HelpMessageOpt("-blsctsleepver", _("How many milliseconds to rest during blsct verification thread loop"));
+
     if (showDebug)
     {
         strUsage += HelpMessageOpt("-printpriority", strprintf("Log transaction priority and fee per kB when mining blocks (default: %u)", DEFAULT_PRINTPRIORITY));
@@ -1339,40 +1344,38 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler, const std
                "setting ntpminmeasures=0. Please be aware that "
                "your system clock needs to be correct in order "
                "to synchronize with the network. ";
-    } else if(nMinMeasures > 0) {
-        while(1)
+    }
+
+    if(nMinMeasures > 0) {
+        // Try to sync NTP 3 times
+        while(nWarningCounter < 3)
         {
+            // We were told to go home
             if(ShutdownRequested())
                 break;
-            if(!NtpClockSync())
-            {
-                sMsg = "A connection could not be made to any ntp server. "
-                       "Please ensure you system clock is correct otherwise "
-                       "your stakes will be rejected by the network";
 
-                if (nWarningCounter == 0)
-                {
-                    uiInterface.ThreadSafeMessageBox(sMsg, "", CClientUIInterface::MSG_ERROR);
-                }
-
-                strMiscWarning = sMsg;
-                AlertNotify(strMiscWarning);
-                LogPrintf(strMiscWarning.c_str());
-
-                uiInterface.InitMessage(_(strprintf("Synchronizing clock attempt %i...", nWarningCounter+1).c_str()));
-
-                nWarningCounter++;
-
-                if(!ShutdownRequested())
-                {
-                    MilliSleep(10000);
-                }
-            }
-            else
-            {
+            // Check if we got a sync with ntp
+            if(NtpClockSync()) {
                 strMiscWarning = "";
                 sMsg = "";
                 break;
+            }
+
+            sMsg = "A connection could not be made to any ntp server. "
+                "Please ensure you system clock is correct otherwise "
+                "your stakes will be rejected by the network";
+
+            strMiscWarning = sMsg;
+            AlertNotify(strMiscWarning);
+            LogPrintf(strMiscWarning.c_str());
+
+            uiInterface.InitMessage(_(strprintf("Synchronizing clock attempt %i...", nWarningCounter+1).c_str()));
+
+            nWarningCounter++;
+
+            if(!ShutdownRequested())
+            {
+                MilliSleep(1500); // Wait for 1 and a half seconds
             }
         }
     }
@@ -1787,7 +1790,7 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler, const std
     CAutoFile est_filein(fopen(est_path.string().c_str(), "rb"), SER_DISK, CLIENT_VERSION);
     // Allowed to fail as this file IS missing on first startup.
     if (!est_filein.IsNull())
-        mempool.ReadFeeEstimates(est_filein, &mempool.cs, &stempool.cs);
+        mempool.ReadFeeEstimates(est_filein);
     fFeeEstimatesInitialized = true;
 
     // ********************************************************* Step 8: load wallet
@@ -1886,18 +1889,20 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler, const std
 #ifdef ENABLE_WALLET
     // Generate coins in the background
     SetStaking(GetBoolArg("-staking", true));
+    uiInterface.InitMessage(_("Booting staking thread"));
     threadGroup.create_thread(boost::bind(&NavcoinStaker, boost::cref(chainparams)));
     if (pwalletMain && GetBoolArg("-blsctmix", DEFAULT_MIX))
     {
+        uiInterface.InitMessage(_("Booting blsCT threads"));
         threadGroup.create_thread(boost::bind(&AggregationSessionThread));
         threadGroup.create_thread(boost::bind(&CandidateVerificationThread));
     }
 #endif
 
-    uiInterface.InitMessage(_("Done loading"));
-
 #ifdef ENABLE_WALLET
     if (pwalletMain) {
+        uiInterface.InitMessage(_("Booting wallet flush thread"));
+
         // Add wallet transactions that aren't already in a block to mapTransactions
         pwalletMain->ReacceptWalletTransactions();
 
@@ -1905,6 +1910,8 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler, const std
         threadGroup.create_thread(boost::bind(&ThreadFlushWalletDB, boost::ref(pwalletMain->strWalletFile)));
     }
 #endif
+
+    uiInterface.InitMessage(_("Done loading"));
 
     return !fRequestShutdown;
 }

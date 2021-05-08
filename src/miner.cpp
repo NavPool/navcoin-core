@@ -368,7 +368,7 @@ void BlockAssembler::AddToBlock(CTxMemPool::txiter iter)
     if (fPrintPriority) {
         double dPriority = iter->GetPriority(nHeight);
         CAmount dummy;
-        mempool.ApplyDeltas(iter->GetTx().GetHash(), dPriority, dummy, &mempool.cs, &stempool.cs);
+        mempool.ApplyDeltas(iter->GetTx().GetHash(), dPriority, dummy);
         LogPrintf("priority %.1f fee %s txid %s\n",
                   dPriority,
                   CFeeRate(iter->GetModifiedFee(), iter->GetTxSize()).ToString(),
@@ -445,7 +445,7 @@ void BlockAssembler::addCombinedBLSCT(const CStateViewCache& inputs)
 
         try
         {
-            if (inputs.HaveInputs(tx) && VerifyBLSCT(tx, bls::PrivateKey::FromBN(Scalar::Rand().bn), blsctData, inputs, state))
+            if (inputs.HaveInputs(tx))
             {
                 nMovedToPublic += inputs.GetValueIn(tx) - tx.GetValueOut();
                 setToCombine.insert(tx);
@@ -637,7 +637,7 @@ void BlockAssembler::addPriorityTxs(bool fProofOfStake, int blockTime)
     {
         double dPriority = mi->GetPriority(nHeight);
         CAmount dummy;
-        mempool.ApplyDeltas(mi->GetTx().GetHash(), dPriority, dummy, &mempool.cs, &stempool.cs);
+        mempool.ApplyDeltas(mi->GetTx().GetHash(), dPriority, dummy);
         vecPriority.push_back(TxCoinAgePriority(dPriority, mi));
     }
     std::make_heap(vecPriority.begin(), vecPriority.end(), pricomparer);
