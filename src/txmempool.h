@@ -11,12 +11,15 @@
 #include <set>
 
 #include <addressindex.h>
+#include <blsct/aggregationsession.h>
+#include <blsct/transaction.h>
 #include <spentindex.h>
 #include <amount.h>
 #include <coins.h>
 #include <indirectmap.h>
 #include <primitives/transaction.h>
 #include <sync.h>
+#include <utiltime.h>
 
 #undef foreach
 #include <boost/multi_index_container.hpp>
@@ -25,6 +28,8 @@
 
 class CAutoFile;
 class CBlockIndex;
+class AggregationSession;
+class EncryptedCandidateTransaction;
 
 inline double AllowFreeThreshold()
 {
@@ -161,32 +166,32 @@ public:
 struct update_descendant_state
 {
     update_descendant_state(int64_t _modifySize, CAmount _modifyFee, int64_t _modifyCount) :
-        modifySize(_modifySize), modifyFee(_modifyFee), modifyCount(_modifyCount)
+            modifySize(_modifySize), modifyFee(_modifyFee), modifyCount(_modifyCount)
     {}
 
     void operator() (CTxMemPoolEntry &e)
-        { e.UpdateDescendantState(modifySize, modifyFee, modifyCount); }
+    { e.UpdateDescendantState(modifySize, modifyFee, modifyCount); }
 
-    private:
-        int64_t modifySize;
-        CAmount modifyFee;
-        int64_t modifyCount;
+private:
+    int64_t modifySize;
+    CAmount modifyFee;
+    int64_t modifyCount;
 };
 
 struct update_ancestor_state
 {
     update_ancestor_state(int64_t _modifySize, CAmount _modifyFee, int64_t _modifyCount, int64_t _modifySigOpsCost) :
-        modifySize(_modifySize), modifyFee(_modifyFee), modifyCount(_modifyCount), modifySigOpsCost(_modifySigOpsCost)
+            modifySize(_modifySize), modifyFee(_modifyFee), modifyCount(_modifyCount), modifySigOpsCost(_modifySigOpsCost)
     {}
 
     void operator() (CTxMemPoolEntry &e)
-        { e.UpdateAncestorState(modifySize, modifyFee, modifyCount, modifySigOpsCost); }
+    { e.UpdateAncestorState(modifySize, modifyFee, modifyCount, modifySigOpsCost); }
 
-    private:
-        int64_t modifySize;
-        CAmount modifyFee;
-        int64_t modifyCount;
-        int64_t modifySigOpsCost;
+private:
+    int64_t modifySize;
+    CAmount modifyFee;
+    int64_t modifyCount;
+    int64_t modifySigOpsCost;
 };
 
 struct update_fee_delta
@@ -429,39 +434,41 @@ public:
     static const int ROLLING_FEE_HALFLIFE = 60 * 60 * 12; // public only for testing
 
     typedef boost::multi_index_container<
-        CTxMemPoolEntry,
-        boost::multi_index::indexed_by<
+    CTxMemPoolEntry,
+    boost::multi_index::indexed_by<
             // sorted by txid
             boost::multi_index::hashed_unique<mempoolentry_txid, SaltedTxidHasher>,
-            // sorted by fee rate
-            boost::multi_index::ordered_non_unique<
-                boost::multi_index::tag<descendant_score>,
-                boost::multi_index::identity<CTxMemPoolEntry>,
-                CompareTxMemPoolEntryByDescendantScore
-            >,
-            // sorted by entry time
-            boost::multi_index::ordered_non_unique<
-                boost::multi_index::tag<entry_time>,
-                boost::multi_index::identity<CTxMemPoolEntry>,
-                CompareTxMemPoolEntryByEntryTime
-            >,
-            // sorted by score (for mining prioritization)
-            boost::multi_index::ordered_unique<
-                boost::multi_index::tag<mining_score>,
-                boost::multi_index::identity<CTxMemPoolEntry>,
-                CompareTxMemPoolEntryByScore
-            >,
-            // sorted by fee rate with ancestors
-            boost::multi_index::ordered_non_unique<
-                boost::multi_index::tag<ancestor_score>,
-                boost::multi_index::identity<CTxMemPoolEntry>,
-                CompareTxMemPoolEntryByAncestorFee
-            >
-        >
+    // sorted by fee rate
+    boost::multi_index::ordered_non_unique<
+            boost::multi_index::tag<descendant_score>,
+    boost::multi_index::identity<CTxMemPoolEntry>,
+    CompareTxMemPoolEntryByDescendantScore
+    >,
+    // sorted by entry time
+    boost::multi_index::ordered_non_unique<
+    boost::multi_index::tag<entry_time>,
+    boost::multi_index::identity<CTxMemPoolEntry>,
+    CompareTxMemPoolEntryByEntryTime
+    >,
+    // sorted by score (for mining prioritization)
+    boost::multi_index::ordered_unique<
+    boost::multi_index::tag<mining_score>,
+    boost::multi_index::identity<CTxMemPoolEntry>,
+    CompareTxMemPoolEntryByScore
+    >,
+    // sorted by fee rate with ancestors
+    boost::multi_index::ordered_non_unique<
+    boost::multi_index::tag<ancestor_score>,
+    boost::multi_index::identity<CTxMemPoolEntry>,
+    CompareTxMemPoolEntryByAncestorFee
+    >
+    >
     > indexed_transaction_set;
 
     mutable CCriticalSection cs;
     indexed_transaction_set mapTx;
+    std::map<uint256, EncryptedCandidateTransaction> mapEncCand;
+    std::map<uint256, AggregationSession> mapAggSession;
     CProposalMap mapProposal;
     CPaymentRequestMap mapPaymentRequest;
     CConsultationMap mapConsultation;
@@ -645,6 +652,66 @@ public:
         return (mapTx.count(hash) != 0);
     }
 
+    bool HaveAggregationSession(uint256 hash) const
+    {
+        LOCK(cs);
+        return (mapAggSession.count(hash) != 0);
+    }
+
+    bool HaveEncryptedCandidateTransaction(uint256 hash) const
+    {
+        LOCK(cs);
+        return (mapEncCand.count(hash) != 0);
+    }
+
+    bool AddAggregationSession(AggregationSession ms)
+    {
+        LOCK(cs);
+
+        for (auto it = mapAggSession.begin(); it != mapAggSession.end();)
+        {
+            ((GetTimeMillis() - it->second.nTime) > 15*60*1000) ? mapAggSession.erase(it++) : (++it);
+        }
+
+        auto ret = mapAggSession.insert(make_pair(ms.GetHash(), ms));
+
+        return ret.second;
+    }
+
+    bool AddEncryptedCandidateTransaction(EncryptedCandidateTransaction ec)
+    {
+        LOCK(cs);
+
+        for (auto it = mapEncCand.begin(); it != mapEncCand.end();)
+        {
+            ((GetTimeMillis() - it->second.nTime) > 15*60*1000) ? mapEncCand.erase(it++) : (++it);
+        }
+
+        auto ret = mapEncCand.insert(make_pair(ec.GetHash(), ec));
+
+        return ret.second;
+    }
+
+    bool GetAggregationSession(const uint256& hash, AggregationSession& ret) const
+    {
+        if (!HaveAggregationSession(hash))
+            return false;
+
+        ret = mapAggSession.at(hash);
+
+        return true;
+    }
+
+    bool GetEncryptedCandidateTransaction(const uint256& hash, EncryptedCandidateTransaction& ret) const
+    {
+        if (!HaveEncryptedCandidateTransaction(hash))
+            return false;
+
+        ret = mapEncCand.at(hash);
+
+        return true;
+    }
+
     std::shared_ptr<const CTransaction> get(const uint256& hash) const;
     TxMempoolInfo info(const uint256& hash) const;
     std::vector<TxMempoolInfo> infoAll() const;
@@ -666,7 +733,7 @@ public:
 
     /** Estimate priority needed to get into the next nBlocks */
     double estimatePriority(int nBlocks) const;
-    
+
     /** Write/Read estimates to disk */
     bool WriteFeeEstimates(CAutoFile& fileout) const;
     bool ReadFeeEstimates(CAutoFile& filein);
@@ -688,8 +755,8 @@ private:
      *  same transaction again, if encountered in another transaction chain.
      */
     void UpdateForDescendants(txiter updateIt,
-            cacheMap &cachedDescendants,
-            const std::set<uint256> &setExclude);
+                              cacheMap &cachedDescendants,
+                              const std::set<uint256> &setExclude);
     /** Update ancestors of hash to add/remove it as a descendant transaction. */
     void UpdateAncestorsOf(bool add, txiter hash, setEntries &setAncestors);
     /** Set ancestor state for an entry */
