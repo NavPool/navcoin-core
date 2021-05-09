@@ -11,15 +11,12 @@
 #include <set>
 
 #include <addressindex.h>
-#include <blsct/aggregationsession.h>
-#include <blsct/transaction.h>
 #include <spentindex.h>
 #include <amount.h>
 #include <coins.h>
 #include <indirectmap.h>
 #include <primitives/transaction.h>
 #include <sync.h>
-#include <utiltime.h>
 
 #undef foreach
 #include <boost/multi_index_container.hpp>
@@ -28,8 +25,6 @@
 
 class CAutoFile;
 class CBlockIndex;
-class AggregationSession;
-class EncryptedCandidateTransaction;
 
 inline double AllowFreeThreshold()
 {
@@ -467,8 +462,6 @@ public:
 
     mutable CCriticalSection cs;
     indexed_transaction_set mapTx;
-    std::map<uint256, EncryptedCandidateTransaction> mapEncCand;
-    std::map<uint256, AggregationSession> mapAggSession;
     CProposalMap mapProposal;
     CPaymentRequestMap mapPaymentRequest;
     CConsultationMap mapConsultation;
@@ -652,66 +645,6 @@ public:
         return (mapTx.count(hash) != 0);
     }
 
-    bool HaveAggregationSession(uint256 hash) const
-    {
-        LOCK(cs);
-        return (mapAggSession.count(hash) != 0);
-    }
-
-    bool HaveEncryptedCandidateTransaction(uint256 hash) const
-    {
-        LOCK(cs);
-        return (mapEncCand.count(hash) != 0);
-    }
-
-    bool AddAggregationSession(AggregationSession ms)
-    {
-        LOCK(cs);
-
-        for (auto it = mapAggSession.begin(); it != mapAggSession.end();)
-        {
-            ((GetTimeMillis() - it->second.nTime) > 15*60*1000) ? mapAggSession.erase(it++) : (++it);
-        }
-
-        auto ret = mapAggSession.insert(make_pair(ms.GetHash(), ms));
-
-        return ret.second;
-    }
-
-    bool AddEncryptedCandidateTransaction(EncryptedCandidateTransaction ec)
-    {
-        LOCK(cs);
-
-        for (auto it = mapEncCand.begin(); it != mapEncCand.end();)
-        {
-            ((GetTimeMillis() - it->second.nTime) > 15*60*1000) ? mapEncCand.erase(it++) : (++it);
-        }
-
-        auto ret = mapEncCand.insert(make_pair(ec.GetHash(), ec));
-
-        return ret.second;
-    }
-
-    bool GetAggregationSession(const uint256& hash, AggregationSession& ret) const
-    {
-        if (!HaveAggregationSession(hash))
-            return false;
-
-        ret = mapAggSession.at(hash);
-
-        return true;
-    }
-
-    bool GetEncryptedCandidateTransaction(const uint256& hash, EncryptedCandidateTransaction& ret) const
-    {
-        if (!HaveEncryptedCandidateTransaction(hash))
-            return false;
-
-        ret = mapEncCand.at(hash);
-
-        return true;
-    }
-
     std::shared_ptr<const CTransaction> get(const uint256& hash) const;
     TxMempoolInfo info(const uint256& hash) const;
     std::vector<TxMempoolInfo> infoAll() const;
@@ -779,7 +712,7 @@ private:
     void removeUnchecked(txiter entry);
 };
 
-/** 
+/**
  * CStateView that brings transactions from a memorypool into view.
  * It does not check for spendings by memory pool transactions.
  */
