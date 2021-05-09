@@ -128,8 +128,8 @@ double TxConfirmStats::EstimateMedianVal(int confTarget, double sufficientTxVal,
             if (!requireGreater && curPct > successBreakPoint)
                 break;
 
-            // Otherwise update the cumulative stats, and the bucket variables
-            // and reset the counters
+                // Otherwise update the cumulative stats, and the bucket variables
+                // and reset the counters
             else {
                 foundAnswer = true;
                 nConf = 0;
@@ -301,7 +301,7 @@ void CBlockPolicyEstimator::removeTx(uint256 hash)
 }
 
 CBlockPolicyEstimator::CBlockPolicyEstimator(const CFeeRate& _minRelayFee)
-    : nBestSeenHeight(0)
+        : nBestSeenHeight(0)
 {
     minTrackedFee = _minRelayFee < CFeeRate(MIN_FEERATE) ? CFeeRate(MIN_FEERATE) : _minRelayFee;
     std::vector<double> vfeelist;
@@ -350,7 +350,7 @@ void CBlockPolicyEstimator::processTransaction(const CTxMemPoolEntry& entry, boo
     if (mapMemPoolTxs[hash].stats != nullptr) {
         LogPrint("estimatefee", "Blockpolicy error mempool tx %s already being tracked\n",
                  hash.ToString().c_str());
-	return;
+        return;
     }
 
     if (txHeight < nBestSeenHeight) {
@@ -386,7 +386,7 @@ void CBlockPolicyEstimator::processTransaction(const CTxMemPoolEntry& entry, boo
         mapMemPoolTxs[hash].stats = &priStats;
         mapMemPoolTxs[hash].bucketIndex =  priStats.NewTx(txHeight, curPri);
     }
-    // Record this as a fee estimate
+        // Record this as a fee estimate
     else if (isFeeDataPoint(feeRate, curPri)) {
         mapMemPoolTxs[hash].stats = &feeStats;
         mapMemPoolTxs[hash].bucketIndex = feeStats.NewTx(txHeight, (double)feeRate.GetFeePerK());
@@ -428,7 +428,7 @@ void CBlockPolicyEstimator::processBlockTx(unsigned int nBlockHeight, const CTxM
     if (entry.GetFee() == 0 || isPriDataPoint(feeRate, curPri)) {
         priStats.Record(blocksToConfirm, curPri);
     }
-    // Record this as a fee estimate
+        // Record this as a fee estimate
     else if (isFeeDataPoint(feeRate, curPri)) {
         feeStats.Record(blocksToConfirm, (double)feeRate.GetFeePerK());
     }
@@ -506,7 +506,7 @@ CFeeRate CBlockPolicyEstimator::estimateFee(int confTarget)
     return CFeeRate(median);
 }
 
-CFeeRate CBlockPolicyEstimator::estimateSmartFee(int confTarget, int *answerFoundAtTarget, const CTxMemPool& pool, CCriticalSection* mpcs, CCriticalSection* spcs)
+CFeeRate CBlockPolicyEstimator::estimateSmartFee(int confTarget, int *answerFoundAtTarget, const CTxMemPool& pool)
 {
     if (answerFoundAtTarget)
         *answerFoundAtTarget = confTarget;
@@ -523,7 +523,7 @@ CFeeRate CBlockPolicyEstimator::estimateSmartFee(int confTarget, int *answerFoun
         *answerFoundAtTarget = confTarget - 1;
 
     // If mempool is limiting txs , return at least the min fee from the mempool
-    CAmount minPoolFee = pool.GetMinFee(GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000, mpcs, spcs).GetFeePerK();
+    CAmount minPoolFee = pool.GetMinFee(GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000).GetFeePerK();
     if (minPoolFee > 0 && minPoolFee > median)
         return CFeeRate(minPoolFee);
 
@@ -542,7 +542,7 @@ double CBlockPolicyEstimator::estimatePriority(int confTarget)
     return priStats.EstimateMedianVal(confTarget, SUFFICIENT_PRITXS, MIN_SUCCESS_PCT, true, nBestSeenHeight);
 }
 
-double CBlockPolicyEstimator::estimateSmartPriority(int confTarget, int *answerFoundAtTarget, const CTxMemPool& pool, CCriticalSection* mpcs, CCriticalSection* spcs)
+double CBlockPolicyEstimator::estimateSmartPriority(int confTarget, int *answerFoundAtTarget, const CTxMemPool& pool)
 {
     if (answerFoundAtTarget)
         *answerFoundAtTarget = confTarget;
@@ -551,7 +551,7 @@ double CBlockPolicyEstimator::estimateSmartPriority(int confTarget, int *answerF
         return -1;
 
     // If mempool is limiting txs, no priority txs are allowed
-    CAmount minPoolFee = pool.GetMinFee(GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000, mpcs, spcs).GetFeePerK();
+    CAmount minPoolFee = pool.GetMinFee(GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000).GetFeePerK();
     if (minPoolFee > 0)
         return INF_PRIORITY;
 
