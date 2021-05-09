@@ -27,9 +27,9 @@ CTxMemPoolEntry::CTxMemPoolEntry(const CTransaction& _tx, const CAmount& _nFee,
                                  int64_t _nTime, double _entryPriority, unsigned int _entryHeight,
                                  bool poolHasNoInputsOf, CAmount _inChainInputValue,
                                  bool _spendsCoinbase, int64_t _sigOpsCost, LockPoints lp):
-    tx(std::make_shared<CTransaction>(_tx)), nFee(_nFee), nTime(_nTime), entryPriority(_entryPriority), entryHeight(_entryHeight),
-    hadNoDependencies(poolHasNoInputsOf), inChainInputValue(_inChainInputValue),
-    spendsCoinbase(_spendsCoinbase), sigOpCost(_sigOpsCost), lockPoints(lp)
+        tx(std::make_shared<CTransaction>(_tx)), nFee(_nFee), nTime(_nTime), entryPriority(_entryPriority), entryHeight(_entryHeight),
+        hadNoDependencies(poolHasNoInputsOf), inChainInputValue(_inChainInputValue),
+        spendsCoinbase(_spendsCoinbase), sigOpCost(_sigOpsCost), lockPoints(lp)
 {
     nTxWeight = GetTransactionWeight(_tx);
     nModSize = _tx.CalculateModifiedSize(GetTxSize());
@@ -353,7 +353,7 @@ void CTxMemPoolEntry::UpdateAncestorState(int64_t modifySize, CAmount modifyFee,
 }
 
 CTxMemPool::CTxMemPool(const CFeeRate& _minReasonableRelayFee) :
-    nTransactionsUpdated(0)
+        nTransactionsUpdated(0)
 {
     _clear(); //lock free clear
 
@@ -965,19 +965,19 @@ bool CTxMemPool::CompareDepthAndScore(const uint256& hasha, const uint256& hashb
 }
 
 namespace {
-class DepthAndScoreComparator
-{
-public:
-    bool operator()(const CTxMemPool::indexed_transaction_set::const_iterator& a, const CTxMemPool::indexed_transaction_set::const_iterator& b)
+    class DepthAndScoreComparator
     {
-        uint64_t counta = a->GetCountWithAncestors();
-        uint64_t countb = b->GetCountWithAncestors();
-        if (counta == countb) {
-            return CompareTxMemPoolEntryByScore()(*a, *b);
+    public:
+        bool operator()(const CTxMemPool::indexed_transaction_set::const_iterator& a, const CTxMemPool::indexed_transaction_set::const_iterator& b)
+        {
+            uint64_t counta = a->GetCountWithAncestors();
+            uint64_t countb = b->GetCountWithAncestors();
+            if (counta == countb) {
+                return CompareTxMemPoolEntryByScore()(*a, *b);
+            }
+            return counta < countb;
         }
-        return counta < countb;
-    }
-};
+    };
 }
 
 std::vector<CTxMemPool::indexed_transaction_set::const_iterator> CTxMemPool::GetSortedDepthAndScore() const
