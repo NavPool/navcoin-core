@@ -547,18 +547,6 @@ ReadKeyValue(CWallet* pwallet, CDataStream& ssKey, CDataStream& ssValue,
             ssKey >> strAddress;
             ssValue >> pwallet->mapPrivateAddressBook[strAddress].purpose;
         }
-        else if (strType == "privatename")
-        {
-            string strAddress;
-            ssKey >> strAddress;
-            ssValue >> pwallet->mapPrivateAddressBook[strAddress].name;
-        }
-        else if (strType == "privatepurpose")
-        {
-            string strAddress;
-            ssKey >> strAddress;
-            ssValue >> pwallet->mapPrivateAddressBook[strAddress].purpose;
-        }
         else if (strType == "tx")
         {
             uint256 hash;

@@ -154,7 +154,7 @@ CBlockTemplate* BlockAssembler::CreateNewBlock(const CScript& scriptPubKeyIn, bo
     pblocktemplate->vTxFees.push_back(-1); // updated at end
     pblocktemplate->vTxSigOpsCost.push_back(-1); // updated at end
 
-    LOCK3(cs_main, mempool.cs, stempool.cs);
+    LOCK2(cs_main, mempool.cs);
     CBlockIndex* pindexPrev = chainActive.Tip();
     nHeight = pindexPrev->nHeight + 1;
     CStateViewCache view(pcoinsTip);
@@ -368,7 +368,7 @@ void BlockAssembler::AddToBlock(CTxMemPool::txiter iter)
     if (fPrintPriority) {
         double dPriority = iter->GetPriority(nHeight);
         CAmount dummy;
-        mempool.ApplyDeltas(iter->GetTx().GetHash(), dPriority, dummy, &mempool.cs, &stempool.cs);
+        mempool.ApplyDeltas(iter->GetTx().GetHash(), dPriority, dummy);
         LogPrintf("priority %.1f fee %s txid %s\n",
                   dPriority,
                   CFeeRate(iter->GetModifiedFee(), iter->GetTxSize()).ToString(),
@@ -445,7 +445,7 @@ void BlockAssembler::addCombinedBLSCT(const CStateViewCache& inputs)
 
         try
         {
-            if (inputs.HaveInputs(tx) && VerifyBLSCT(tx, bls::PrivateKey::FromBN(Scalar::Rand().bn), blsctData, inputs, state))
+            if (inputs.HaveInputs(tx))
             {
                 nMovedToPublic += inputs.GetValueIn(tx) - tx.GetValueOut();
                 setToCombine.insert(tx);
@@ -637,7 +637,7 @@ void BlockAssembler::addPriorityTxs(bool fProofOfStake, int blockTime)
     {
         double dPriority = mi->GetPriority(nHeight);
         CAmount dummy;
-        mempool.ApplyDeltas(mi->GetTx().GetHash(), dPriority, dummy, &mempool.cs, &stempool.cs);
+        mempool.ApplyDeltas(mi->GetTx().GetHash(), dPriority, dummy);
         vecPriority.push_back(TxCoinAgePriority(dPriority, mi));
     }
     std::make_heap(vecPriority.begin(), vecPriority.end(), pricomparer);
@@ -980,6 +980,8 @@ bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParam
                   std::map<uint256, int> mapCountAnswers;
                   std::map<uint256, int> mapCacheMaxAnswers;
 
+                  CProposal proposal;
+                  CPaymentRequest prequest;
                   CConsultation consultation;
                   CConsultationAnswer answer;
 
@@ -1141,13 +1143,15 @@ bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParam
                   {
                       for (auto& it: list)
                       {
+                          LOCK(cs_main);
+
                           uint256 hash = it.first;
                           int64_t val = it.second;
 
-                          bool fProposal = view.HaveProposal(hash);
-                          bool fPaymentRequest = view.HavePaymentRequest(hash);
+                          bool fProposal = view.HaveProposal(hash) && view.GetProposal(hash, proposal) && proposal.CanVote(view);
+                          bool fPaymentRequest = view.HavePaymentRequest(hash) && view.GetPaymentRequest(hash, prequest) && prequest.CanVote(view);
 
-                          if (mapAddedVotes.count(hash) == 0 && votes.count(hash) == 0 && (fProposal || fPaymentRequest) && !(pblock->nNonce & 1))
+                          if (val != VoteFlags::VOTE_REMOVE && mapAddedVotes.count(hash) == 0 && votes.count(hash) == 0 && (fProposal || fPaymentRequest) && !(pblock->nNonce & 1))
                           {
                               pblock->vtx[0].vout.insert(pblock->vtx[0].vout.begin(), CTxOut());
 
@@ -1161,8 +1165,8 @@ bool SignBlock(CBlock *pblock, CWallet& wallet, int64_t nFees, const CChainParam
                               votes[hash] = true;
                           }
 
-                          bool fConsultation = view.HaveConsultation(hash) && view.GetConsultation(hash, consultation);
-                          bool fAnswer = view.HaveConsultationAnswer(hash) && view.GetConsultationAnswer(hash, answer);
+                          bool fConsultation = view.HaveConsultation(hash) && view.GetConsultation(hash, consultation) && consultation.CanBeVoted(val);
+                          bool fAnswer = view.HaveConsultationAnswer(hash) && view.GetConsultationAnswer(hash, answer) && answer.CanBeVoted(view);
 
                           if ((fConsultation || fAnswer) && !(pblock->nNonce & 1))
                           {

@@ -27,6 +27,9 @@
 #define DEFAULT_TX_MIXCOINS 5
 #define DEFAULT_MIX true
 
+#define BLSCT_THREAD_SLEEP_AGG 5000
+#define BLSCT_THREAD_SLEEP_VER 16000
+
 #define BLSCT_TX_INPUT_FEE 200000
 #define BLSCT_TX_OUTPUT_FEE 200000
 
@@ -85,8 +88,16 @@ public:
         READWRITE(vData);
     }
 
+    uint256 GetHash() {
+        if (cachedHash == uint256())
+            cachedHash = SerializeHash(*this);
+        return cachedHash;
+    }
+
     std::vector<unsigned char> vPublicKey;
     std::vector<unsigned char> vData;
+    uint256 cachedHash;
+    int64_t nTime;
 };
 
 class DecryptedCandidateTransaction

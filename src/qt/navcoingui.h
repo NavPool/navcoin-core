@@ -93,30 +93,6 @@ public:
     /** Set the bubble counter on menubtns */
     void setMenuBubble(int index, int drak);
 
-    /** Get the screen scale, usefull for scaling UI elements */
-    float scale();
-
-    /** Show/Hide the wallet sync warning notification */
-    void showOutOfSyncWarning(bool fShow);
-
-    /** Show/Hide a notification */
-    void showHideNotification(bool show, int index);
-
-    /** Set the active menuBtns */
-    void setActiveMenu(int index);
-
-    /** Prompt user if they have not saved changes to options page */
-    bool checkSettingsSaved();
-
-    /** Sets the balance for the wallet GUI header */
-    void setBalance(const CAmount &avail, const CAmount &pendi, const CAmount &immat, const CAmount &priv, const CAmount& privpending, const CAmount& privlocked);
-
-    /** Sets the staked amounts for the wallet GUI header */
-    void setStaked(const CAmount &all, const CAmount &today, const CAmount &week);
-
-    /** Set the bubble counter on menubtns */
-    void setMenuBubble(int index, int drak);
-
     /** Set the client model.
         The client model represents the part of the core that communicates with the P2P network, and is wallet-agnostic.
     */
