@@ -5,12 +5,12 @@
 #include "aggregationsession.h"
 #include <main.h>
 
-std::set<uint256> setKnownSessions;
 CCriticalSection cs_aggregation;
 CCriticalSection cs_sessionKeys;
 
 bool AggregationSession::fJoining = false;
-SafeQueue<std::shared_ptr<EncryptedCandidateTransaction>> candidatesQueue;
+SafeQueue<EncryptedCandidateTransaction> candidatesQueue;
+std::vector<COutput> vAvailableCoins;
 
 AggregationSession::AggregationSession(const CStateViewCache* inputsIn) : inputs(inputsIn), fState(0), nVersion(2)
 {
@@ -75,16 +75,6 @@ bool AggregationSession::Start()
     return true;
 }
 
-bool AggregationSession::IsKnown(const AggregationSession& ms)
-{
-    return setKnownSessions.find(ms.GetHash()) != setKnownSessions.end();
-}
-
-bool AggregationSession::IsKnown(const EncryptedCandidateTransaction& ec)
-{
-    return setKnownSessions.find(SerializeHash(ec)) != setKnownSessions.end();
-}
-
 void AggregationSession::Stop()
 {
     if (nVersion == 1)
@@ -136,10 +126,20 @@ bool AggregationSession::CleanCandidateTransactions()
     {
         AssertLockHeld(cs_aggregation);
 
-        vTransactionCandidates.erase(std::remove_if(vTransactionCandidates.begin(), vTransactionCandidates.end(), [=](CandidateTransaction x) {
+        set<CTxIn> seenInputs;
+
+        vTransactionCandidates.erase(std::remove_if(vTransactionCandidates.begin(), vTransactionCandidates.end(), [=, &seenInputs](CandidateTransaction x) {
             if (!inputs->HaveInputs(x.tx))
             {
                 return true;
+            }
+
+            for (int i = 0; i < x.tx.vin.size(); i++)
+            {
+                CTxIn in = x.tx.vin[i];
+                if (seenInputs.count(in))
+                    return true;
+                seenInputs.insert(in);
             }
 
             if (CWalletTx(NULL, x.tx).InputsInMempool()) {
@@ -230,20 +230,6 @@ bool AggregationSession::SelectCandidates(CandidateTransaction &ret)
         if (fShouldIContinue)
             continue;
 
-        try
-        {
-            if (!VerifyBLSCT(vTransactionCandidates[i].tx, bls::PrivateKey::FromBN(Scalar::Rand().bn), blsctData, *inputs, state, false, vTransactionCandidates[i].fee))
-            {
-                i++;
-                continue;
-            }
-        }
-        catch(...)
-        {
-            i++;
-            continue;
-        }
-
         setTransactionsToCombine.insert(vTransactionCandidates[i].tx);
         nFee += vTransactionCandidates[i].fee;
         i++;
@@ -308,20 +294,42 @@ bool AggregationSession::AddCandidateTransaction(const std::vector<unsigned char
     return true;
 }
 
-bool AggregationSession::NewEncryptedCandidateTransaction(std::shared_ptr<EncryptedCandidateTransaction> etx)
+bool AggregationSession::NewEncryptedCandidateTransaction(EncryptedCandidateTransaction etx)
 {
-    setKnownSessions.insert(SerializeHash(*etx));
+    if (!GetBoolArg("-blsctmix", DEFAULT_MIX))
+        return false;
 
-    candidatesQueue.push(etx);
+    bool ret = true;
 
-    return true;
+    if (vTransactionCandidates.size() >= GetArg("-defaultmixin", DEFAULT_TX_MIXCOINS)*100)
+    {
+        ret = false;
+    }
+    else if (!(pwalletMain->GetPrivateBalance() > 0))
+    {
+        ret = false;
+    }
+    else
+    {
+        candidatesQueue.push(etx);
+    }
+
+
+    return ret;
 }
 
 void AggregationSession::AnnounceHiddenService()
 {
+    this->nTime = GetTimeMillis();
+
+    LogPrint("aggregationsession", "AggregationSession::%s: created session %s\n", __func__, GetHiddenService());
+
+    StempoolAddAggregationSession(*this);
+    MempoolAddAggregationSession(*this);
+
     if (!GetBoolArg("-dandelion", true))
     {
-        RelayAggregationSession(*this);
+        RelayAggregationSession(this->GetHash());
         return;
     }
 
@@ -329,10 +337,12 @@ void AggregationSession::AnnounceHiddenService()
 
     int64_t nCurrTime = GetTimeMicros();
     int64_t nEmbargo = 1000000*DANDELION_EMBARGO_MINIMUM+PoissonNextSend(nCurrTime, DANDELION_EMBARGO_AVG_ADD);
-    InsertDandelionAggregationSessionEmbargo(this,nEmbargo);
+    InsertDandelionAggregationSessionEmbargo(this->GetHash(), nEmbargo);
 
-    if (!LocalDandelionDestinationPushAggregationSession(*this))
-        RelayAggregationSession(*this);
+    CInv inv(MSG_DANDELION_AGGSESSION, this->GetHash());
+
+    if (!LocalDandelionDestinationPushInventory(inv))
+        RelayAggregationSession(this->GetHash());
 }
 
 std::string Socks5ErrorToString(int err)
@@ -391,19 +401,14 @@ bool static IntRecv(char* data, size_t len, int timeout, SOCKET& hSocket)
 
 bool AggregationSession::Join()
 {
-    setKnownSessions.insert(this->GetHash());
-
     if (!IsBLSCTEnabled(chainActive.Tip(),Params().GetConsensus()))
         return false;
 
     if (!pwalletMain)
         return false;
 
-    {
-        LOCK(pwalletMain->cs_wallet);
-        if (*(pwalletMain->aggSession) == *this)
-            return false;
-    }
+    if (*(pwalletMain->aggSession) == *this)
+        return false;
 
     if (!GetBoolArg("-blsctmix", DEFAULT_MIX))
         return false;
@@ -414,28 +419,18 @@ bool AggregationSession::Join()
     if (nVersion == 2 && vPublicKey.size() == 0)
         return false;
 
-    LogPrint("aggregationsession","AggregationSession::%s: new session %s\n", __func__, GetHiddenService());
-
-    std::vector<COutput> vAvailableCoins;
-
-    pwalletMain->AvailablePrivateCoins(vAvailableCoins, true, nullptr, false, DEFAULT_MIN_OUTPUT_AMOUNT);
+    LogPrint("aggregationsession","AggregationSession::%s: new session v%d %s\n", __func__, nVersion, GetHiddenService());
 
     if (vAvailableCoins.size() == 0)
         return false;
 
-    std::random_shuffle(vAvailableCoins.begin(), vAvailableCoins.end(), GetRandInt);
-
     if (nVersion == 1)
     {
-        joinThread = boost::thread(boost::bind(&AggregationSession::JoinThread, GetHiddenService(), vAvailableCoins, inputs));
-
-        joinThread.detach();
+        boost::thread(boost::bind(&AggregationSession::JoinThread, GetHiddenService(), vAvailableCoins, inputs)).detach();
     }
     else if (nVersion == 2)
     {
-        joinThread = boost::thread(boost::bind(&AggregationSession::JoinThreadV2, vPublicKey, vAvailableCoins, inputs));
-
-        joinThread.detach();
+        boost::thread(boost::bind(&AggregationSession::JoinThreadV2, vPublicKey, vAvailableCoins, inputs)).detach();
     }
 
 
@@ -454,40 +449,36 @@ bool AggregationSession::BuildCandidateTransaction(const CWalletTx *prevcoin, co
     candidate.nVersion = TX_BLS_INPUT_FLAG | TX_BLS_CT_FLAG;
 
     blsctDoublePublicKey k;
-    blsctPublicKey pk;
     blsctKey bk, v, s;
 
-    std::vector<shared_ptr<CReserveBLSCTBlindingKey>> reserveBLSCTKey;
-    shared_ptr<CReserveBLSCTBlindingKey> rk(new CReserveBLSCTBlindingKey(pwalletMain));
-    reserveBLSCTKey.insert(reserveBLSCTKey.begin(), std::move(rk));
-
-    reserveBLSCTKey[0]->GetReservedKey(pk);
+    std::vector<unsigned char> rand;
+    rand.resize(32);
+    GetRandBytes(rand.data(), 32);
+    bk = bls::AugSchemeMPL::KeyGen(rand);
 
     std::vector<unsigned char> ephemeralKey;
 
     {
         LOCK(pwalletMain->cs_wallet);
 
-        if (!pwalletMain->GetBLSCTBlindingKey(pk, bk))
-        {
-            return error("AggregationSession::%s: Could not get private key from blsct pool",__func__);
-        }
-
         ephemeralKey = bk.GetKey().Serialize();
 
         if (!pwalletMain->GetBLSCTSubAddressPublicKeys(prevcoin->vout[prevout].outputKey, prevcoin->vout[prevout].spendingKey, k))
         {
-            return error("AggregationSession::%s: BLSCT keys not available", __func__);
+            LogPrint("blsct", "AggregationSession::%s: BLSCT keys not available", __func__);
+            return false;
         }
 
         if (!pwalletMain->GetBLSCTSubAddressSpendingKeyForOutput(prevcoin->vout[prevout].outputKey, prevcoin->vout[prevout].spendingKey, s))
         {
-            return error("AggregationSession::%s: BLSCT keys for subaddress not available (is the wallet unlocked?)", __func__);
+            LogPrint("blsct", "AggregationSession::%s: BLSCT keys for subaddress not available (is the wallet unlocked?)", __func__);
+            return false;
         }
 
         if (!pwalletMain->GetBLSCTViewKey(v))
         {
-            return error("AggregationSession::%s: BLSCT keys not available when getting view key", __func__);
+            LogPrint("blsct", "AggregationSession::%s: BLSCT keys not available when getting view key", __func__);
+            return false;
         }
     }
 
@@ -618,18 +609,24 @@ bool AggregationSession::JoinSingleV2(int index, std::vector<unsigned char> &vPu
     {
         EncryptedCandidateTransaction encryptedTx(publicKey, tx);
 
+        encryptedTx.nTime = GetTimeMillis();
+
+        StempoolAddEncryptedCandidateTransaction(encryptedTx);
+        MempoolAddEncryptedCandidateTransaction(encryptedTx);
+
         if (!GetBoolArg("-dandelion", true))
         {
-            RelayEncryptedCandidate(encryptedTx);
+            RelayEncryptedCandidate(encryptedTx.GetHash());
             return true;
         }
 
         int64_t nCurrTime = GetTimeMicros();
         int64_t nEmbargo = 1000000*DANDELION_EMBARGO_MINIMUM+PoissonNextSend(nCurrTime, DANDELION_EMBARGO_AVG_ADD);
-        InsertDandelionEncryptedCandidateEmbargo(encryptedTx,nEmbargo);
+        InsertDandelionEncryptedCandidateEmbargo(encryptedTx.GetHash(), nEmbargo);
 
-        if (!LocalDandelionDestinationPushEncryptedCandidate(encryptedTx))
-            RelayEncryptedCandidate(encryptedTx);
+        CInv inv(MSG_DANDELION_ENCCAND, encryptedTx.GetHash());
+        if (!LocalDandelionDestinationPushInventory(inv))
+            RelayEncryptedCandidate(encryptedTx.GetHash());
     }
     catch(...)
     {
@@ -938,6 +935,8 @@ void AggregationSessionThread()
     SetThreadPriority(THREAD_PRIORITY_LOWEST);
     RenameThread("navcoin-candidate-coins");
 
+    int aggSleep = GetArg("-blsctsleepagg", BLSCT_THREAD_SLEEP_AGG);
+
     try {
         while (true) {
             do {
@@ -951,7 +950,7 @@ void AggregationSessionThread()
                 MilliSleep(1000);
             } while (true);
 
-            MilliSleep(GetRand(120*1000));
+            MilliSleep(GetRand(aggSleep, 120000));
 
             {
                 LOCK(cs_aggregation);
@@ -972,7 +971,11 @@ void AggregationSessionThread()
                 }
             }
 
-            MilliSleep(GetRand(180*1000));
+            pwalletMain->AvailablePrivateCoins(vAvailableCoins, true, nullptr, false, DEFAULT_MIN_OUTPUT_AMOUNT);
+
+            std::random_shuffle(vAvailableCoins.begin(), vAvailableCoins.end(), GetRandInt);
+
+            MilliSleep(GetRand(aggSleep, 180000));
         }
     }
     catch (const boost::thread_interrupted&)
@@ -993,6 +996,8 @@ void CandidateVerificationThread()
     SetThreadPriority(THREAD_PRIORITY_LOWEST);
     RenameThread("navcoin-candidate-coins-verification");
 
+    int verSleep = GetArg("-blsctsleepver", BLSCT_THREAD_SLEEP_VER);
+
     try {
         while (true) {
             do {
@@ -1006,7 +1011,7 @@ void CandidateVerificationThread()
                 MilliSleep(1000);
             } while (true);
 
-            std::shared_ptr<EncryptedCandidateTransaction> etx;
+            EncryptedCandidateTransaction etx;
 
             while(candidatesQueue.pop(etx))
             {
@@ -1020,7 +1025,7 @@ void CandidateVerificationThread()
                     {
                         try
                         {
-                            if (etx->Decrypt(it.second, pwalletMain->aggSession->inputs, tx))
+                            if (etx.Decrypt(it.second, pwalletMain->aggSession->inputs, tx))
                             {
                                 fSolved = true;
                                 break;
@@ -1034,23 +1039,56 @@ void CandidateVerificationThread()
                 }
 
                 if (!fSolved)
+                {
                     continue;
+                }
 
                 {
                     LOCK(cs_aggregation);
 
+                    bool stop = false;
+
                     for (auto& it: pwalletMain->aggSession->GetTransactionCandidates())
                     {
-                        if (it.tx.vin == tx.tx.vin) // We already have this input
-                            continue;
+                        bool stop1 = false;
+                        for (auto &in: it.tx.vin)
+                        {
+                            bool stop2 = false;
+                            for (auto &in2: tx.tx.vin)
+                            {
+                                if (in == in2) // We already have this input
+                                {
+                                    stop2 = true;
+                                    break;
+                                }
+                            }
+
+                            if (stop2)
+                            {
+                                stop1 = true;
+                                break;
+                            }
+                        }
+                        if (stop1)
+                        {
+                            stop = true;
+                            break;
+                        }
                     }
 
-
-                    if (CWalletTx(NULL, tx.tx).InputsInMempool()) {
+                    if (stop)
+                    {
                         continue;
                     }
 
-                    if (CWalletTx(NULL, tx.tx).InputsInStempool()) {
+                    if (CWalletTx(NULL, tx.tx).InputsInMempool()) {
+                        stop = true;
+                    } else if (CWalletTx(NULL, tx.tx).InputsInStempool()) {
+                        stop = true;
+                    }
+
+                    if (stop)
+                    {
                         continue;
                     }
 
@@ -1060,7 +1098,7 @@ void CandidateVerificationThread()
                 LogPrint("aggregationsession", "AggregationSession::%s: received one candidate\n", __func__);
             }
 
-            MilliSleep(GetRand(50));
+            MilliSleep(GetRand(verSleep, verSleep + 100));
         }
     }
     catch (const boost::thread_interrupted&)

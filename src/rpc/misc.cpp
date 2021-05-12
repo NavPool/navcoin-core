@@ -829,7 +829,7 @@ UniValue getaddressmempool(const UniValue& params, bool fHelp)
 
     std::vector<std::pair<CMempoolAddressDeltaKey, CMempoolAddressDelta> > indexes;
 
-    if (!mempool.getAddressIndex(addresses, indexes, &mempool.cs, &stempool.cs)) {
+    if (!mempool.getAddressIndex(addresses, indexes)) {
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "No information available for address");
     }
 
@@ -1221,7 +1221,7 @@ UniValue getaddresshistory(const UniValue& params, bool fHelp)
         auto b_ = b.first;
 
         if (a_.blockHeight == b_.blockHeight) {
-            return a_.time < b_.time;
+            return a_.txindex < b_.txindex;
         } else {
             return a_.blockHeight < b_.blockHeight;
         }
